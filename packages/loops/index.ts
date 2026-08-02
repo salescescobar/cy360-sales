@@ -29,7 +29,7 @@ export type LoopsCfg = {
   locations: Record<string, { active: boolean }>;
   refresh?: { backfill_months?: number };
   sources: {
-    gotab: { enabled: boolean; mode: "csv" | "api" };
+    gotab: { enabled: boolean; mode: "csv" | "api" | "browser" };
     courtreserve: { enabled: boolean; mode: "csv" | "api"; locations?: string[] };
   };
 };
@@ -58,17 +58,33 @@ export type LocationRefreshResult = {
  * traced and reported so the day is flagged "incomplete", never presented as final
  * (criteria #3). Returns the same shape whether the caller is the cron loop or a dry run.
  */
-export async function refreshLocationDay(locationSlug: string, date: string, cfg: LoopsCfg = loadCfg()): Promise<LocationRefreshResult> {
+export async function refreshLocationDay(
+  locationSlug: string,
+  date: string,
+  cfg: LoopsCfg = loadCfg(),
+  // Only set by scripts/gotab-refresh.ts (mode=browser), which supplies the Playwright
+  // driver from gotab-ingest/browser.ts. Keeping it out of this signature's default wiring
+  // is what keeps Playwright out of the Vercel serverless bundle for /api/cron/refresh.
+  gotabOpts: { fetchText?: (locationSlug: string, date: string) => Promise<string> } = {},
+): Promise<LocationRefreshResult> {
   let gotabStatus: RefreshStatus = "missing";
   let courtreserveStatus: RefreshStatus = "missing";
   let error: string | undefined;
+  let gotabDayOpen = false;
   const rows: DailySalesRow[] = [];
 
   try {
-    const day = await ingestGotabDay(locationSlug, date, { mode: cfg.sources.gotab.mode });
+    const day = await ingestGotabDay(locationSlug, date, { mode: cfg.sources.gotab.mode, fetchText: gotabOpts.fetchText });
     if (day) {
       gotabStatus = "loaded";
       rows.push({ locationSlug, date, source: "gotab", grossAmountCents: day.totalGrossCents, breakdown: day.breakdown });
+      // Browser mode only: GoTab keeps a fiscal day "open" (tabs still active) until it's
+      // closed out. Its totals are provisional, so the row is still recorded but the day
+      // must not be presented as a settled, final day (spec criterion #3).
+      if (day.isOpen) {
+        gotabDayOpen = true;
+        error = [error, "gotab: day still open (Open Tabs > 0) — totals are provisional"].filter(Boolean).join("; ");
+      }
     }
   } catch (e) {
     gotabStatus = "error";
@@ -94,7 +110,8 @@ export async function refreshLocationDay(locationSlug: string, date: string, cfg
     error = [error, `warehouse write: ${(e as Error).message}`].filter(Boolean).join("; ");
   }
 
-  const status: "complete" | "incomplete" = gotabStatus === "loaded" && courtreserveStatus === "loaded" ? "complete" : "incomplete";
+  const status: "complete" | "incomplete" =
+    gotabStatus === "loaded" && courtreserveStatus === "loaded" && !gotabDayOpen ? "complete" : "incomplete";
   try {
     await traceRefresh({ locationSlug, date, at: new Date().toISOString(), gotabStatus, courtreserveStatus, status, error });
   } catch (e) {

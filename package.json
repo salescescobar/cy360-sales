@@ -17,6 +17,7 @@
     "loop:status": "tsx scripts/loop-status.ts",
     "loop:auto": "tsx scripts/autonomous-loop.ts",
     "backfill": "tsx scripts/backfill.ts",
+    "refresh:gotab": "tsx scripts/gotab-refresh.ts",
     "seed:fixtures": "tsx scripts/seed-fixtures.ts",
     "cost:report": "tsx scripts/cost-report.ts",
     "selftest": "tsx scripts/selftest.ts",
@@ -30,6 +31,7 @@
     "@playwright/test": "^1.48.0",
     "@types/node": "^20.14.0",
     "@types/react": "^19.0.0",
+    "playwright": "^1.48.0",
     "promptfoo": "^0.100.5",
     "tsx": "^4.19.0",
     "typescript": "^5.6.2"

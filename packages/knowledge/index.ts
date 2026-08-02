@@ -38,6 +38,22 @@ function supabaseConfigured(): boolean {
   return !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 }
 
+/** Vercel sets this in every deployment (production, preview, `vercel dev`). Serverless
+ *  functions there have no writable disk, so the .local-storage fallback must never be
+ *  attempted there — Supabase is the only warehouse in production. */
+function onVercel(): boolean {
+  return process.env.VERCEL === "1";
+}
+
+function requireLocalFallbackAllowed(op: string): void {
+  if (onVercel()) {
+    throw new Error(
+      `knowledge.${op}: Supabase is not configured/migrated and Vercel has no writable disk for the ` +
+      "local fallback — set SUPABASE_URL/SUPABASE_SERVICE_KEY and apply supabase/migrations/0001_init.sql.",
+    );
+  }
+}
+
 /** Thrown when Supabase is configured but the warehouse tables don't exist yet — distinct
  *  from a real outage/auth error, and the only case that falls back to local storage. */
 class SchemaNotMigratedError extends Error {}
@@ -89,6 +105,7 @@ export async function writeDay(locationSlug: string, date: string, rows: DailySa
       warnSchemaNotMigrated();
     }
   }
+  requireLocalFallbackAllowed("writeDay");
   mkdirSync(join(LOCAL_DIR, locationSlug), { recursive: true });
   const path = localDayPath(locationSlug, date);
   const existing: DailySalesRow[] = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : [];
@@ -170,6 +187,7 @@ export async function traceRefresh(trace: RefreshTrace): Promise<void> {
       warnSchemaNotMigrated();
     }
   }
+  requireLocalFallbackAllowed("traceRefresh");
   mkdirSync(LOCAL_DIR, { recursive: true });
   appendFileSync(TRACE_FILE, JSON.stringify(trace) + "\n");
 }
