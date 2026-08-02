@@ -41,16 +41,19 @@ test("Orlando manager sees Orlando, other locations blocked, day/month toggle wo
   await expect(page.getByText(SEED_TOTAL)).toBeVisible();
   await expect(page.getByText("Complete", { exact: false })).toBeVisible();
 
+  // The full month is backfilled (data/imports fixtures cover the trailing 12 months), so
+  // July shows every day but the one missing courtreserve fixture (07-02) as complete.
+  const SEED_MONTH_SUMMARY = "30 complete day(s), 1 incomplete (excluded)";
   await page.getByRole("tab", { name: "Month" }).click();
   await page.locator('input[type="month"]').fill(SEED_MONTH);
-  await expect(page.getByText(SEED_TOTAL)).toBeVisible();
+  await expect(page.getByText(SEED_MONTH_SUMMARY)).toBeVisible();
 
   // Reloading mid-flow must preserve the Month tab and selected month, not silently
   // revert to Day/today.
   await page.reload();
   await expect(page.getByRole("tab", { name: "Month", selected: true })).toBeVisible();
   await expect(page.locator('input[type="month"]')).toHaveValue(SEED_MONTH);
-  await expect(page.getByText(SEED_TOTAL)).toBeVisible();
+  await expect(page.getByText(SEED_MONTH_SUMMARY)).toBeVisible();
 
   // Inactive/other location blocked, even by direct URL (invariant #1).
   await page.goto("/dashboard/nashville");
