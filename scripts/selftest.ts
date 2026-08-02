@@ -37,6 +37,12 @@ function createSlackCapture(onMessage: (text: string) => void): Promise<{ url: s
 async function main() {
   console.log("\n▶ CY360 Sales self-test\n");
 
+  // Self-test always exercises the LOCAL warehouse fallback, regardless of whatever
+  // Supabase credentials happen to be in the ambient shell — reproducible in CI with
+  // zero secrets, same guarantee the original template made for storage.ts.
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_SERVICE_KEY;
+
   // 1 · gotab-ingest: fixture day -> normalized rows with matching totals
   const { ingestGotabDay } = await import("../packages/skills/gotab-ingest/index");
   await t("gotab-ingest: fixture day -> normalized rows, totals match hand computation", async () => {

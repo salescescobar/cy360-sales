@@ -1,0 +1,12 @@
+[
+  {
+    "locationSlug": "orlando",
+    "date": "2026-07-02",
+    "source": "gotab",
+    "grossAmountCents": 99000,
+    "breakdown": {
+      "food": 69000,
+      "beverage": 30000
+    }
+  }
+]
