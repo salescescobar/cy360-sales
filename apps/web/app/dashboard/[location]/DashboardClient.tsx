@@ -28,6 +28,9 @@ function yesterdayIso(): string {
   return d.toISOString().slice(0, 10);
 }
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_RE = /^\d{4}-\d{2}$/;
+
 export default function DashboardClient({ location }: { location: string }) {
   const [period, setPeriod] = useState<"day" | "month">("day");
   const [date, setDate] = useState(yesterdayIso());
@@ -36,6 +39,27 @@ export default function DashboardClient({ location }: { location: string }) {
   const [monthly, setMonthly] = useState<MonthlyMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Restore whatever tab/date the manager had selected before a reload — a reload should
+  // never silently revert them to Day/today.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const p = params.get("period");
+    const d = params.get("date");
+    const m = params.get("month");
+    if (p === "month" || p === "day") setPeriod(p);
+    if (d && DATE_RE.test(d)) setDate(d);
+    if (m && MONTH_RE.test(m)) setMonth(m);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep the URL in sync so a reload (or a shared link) lands back on the same view.
+  useEffect(() => {
+    const params = new URLSearchParams();
+    params.set("period", period);
+    if (period === "day") params.set("date", date); else params.set("month", month);
+    window.history.replaceState(null, "", `?${params.toString()}`);
+  }, [period, date, month]);
 
   useEffect(() => {
     let cancelled = false; // ignore a slower, now-stale request that resolves after a newer one

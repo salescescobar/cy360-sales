@@ -17,6 +17,7 @@
     "loop:status": "tsx scripts/loop-status.ts",
     "loop:auto": "tsx scripts/autonomous-loop.ts",
     "backfill": "tsx scripts/backfill.ts",
+    "seed:fixtures": "tsx scripts/seed-fixtures.ts",
     "cost:report": "tsx scripts/cost-report.ts",
     "selftest": "tsx scripts/selftest.ts",
     "models:check": "tsx scripts/check-models.ts"

@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { readDay, readMonth, type DailySalesRow } from "../../../../../packages/knowledge/index";
 import { aggregateDaily, aggregateMonthly, type DailyMetrics } from "../../../../../packages/skills/metrics/index";
 import { activeLocationSlugs } from "../../lib/locations";
+import { verifySession, SESSION_COOKIE_NAME } from "../../lib/session";
 
 function toDailyMetrics(date: string, rows: DailySalesRow[]): DailyMetrics {
   const gotab = rows.find(r => r.source === "gotab");
@@ -35,8 +36,8 @@ export async function GET(req: NextRequest) {
   const dateParam = url.searchParams.get("date");
 
   const jar = await cookies();
-  const managerLocation = jar.get("manager_location")?.value;
-  if (!managerLocation || managerLocation !== location) {
+  const session = verifySession(jar.get(SESSION_COOKIE_NAME)?.value);
+  if (!session || session.locationSlug !== location) {
     return NextResponse.json({ error: "forbidden — not your location" }, { status: 403 });
   }
   if (!activeLocationSlugs().includes(location)) {

@@ -1,14 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { activeLocationSlugs } from "../../lib/locations";
+import { z } from "zod";
+import { findManagerByEmail, verifyPassword } from "../../../../../packages/knowledge/managers";
+import { signSession, SESSION_COOKIE_NAME } from "../../lib/session";
+
+const LoginForm = z.object({
+  email: z.string().trim().email(),
+  password: z.string().min(1),
+});
 
 export async function POST(req: NextRequest) {
   const form = await req.formData();
-  const location = String(form.get("location") ?? "");
-  if (!activeLocationSlugs().includes(location)) {
-    return NextResponse.redirect(new URL("/login?error=invalid_location", req.url));
+  const parsed = LoginForm.safeParse({ email: form.get("email"), password: form.get("password") });
+  if (!parsed.success) {
+    return NextResponse.redirect(new URL("/login?error=invalid_credentials", req.url));
   }
-  const res = NextResponse.redirect(new URL(`/dashboard/${location}`, req.url));
-  res.cookies.set("manager_location", location, {
+
+  const manager = await findManagerByEmail(parsed.data.email);
+  if (!manager || !verifyPassword(parsed.data.password, manager.passwordHash)) {
+    return NextResponse.redirect(new URL("/login?error=invalid_credentials", req.url));
+  }
+
+  const res = NextResponse.redirect(new URL(`/dashboard/${manager.locationSlug}`, req.url));
+  res.cookies.set(SESSION_COOKIE_NAME, signSession({ managerId: manager.id, locationSlug: manager.locationSlug }), {
     httpOnly: true,
     sameSite: "lax",
     path: "/",

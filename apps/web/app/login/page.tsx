@@ -1,26 +1,32 @@
-import { allLocations } from "../lib/locations";
-
 export const metadata = { title: "Sign in — CY360 Sales" };
 
-/**
- * Demo login: pick your location. Real SSO/auth plugs in here before production —
- * Supabase RLS (supabase/migrations/0001_init.sql) is the actual isolation boundary,
- * this cookie is only which location's screen you land on.
- */
-export default function LoginPage() {
-  const locations = allLocations().filter(l => l.active);
+const ERROR_MESSAGES: Record<string, string> = {
+  invalid_credentials: "Incorrect email or password.",
+};
+
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  const { error } = await searchParams;
   return (
     <main>
       <h1>CY360 Sales</h1>
-      <p>Pick your location to continue.</p>
+      <p>Sign in to your location&apos;s dashboard.</p>
+      {error && <p role="alert">{ERROR_MESSAGES[error] ?? "Couldn't sign you in — try again."}</p>}
       <form method="POST" action="/api/login">
-        {locations.map(l => (
-          <label key={l.slug} style={{ display: "block", margin: "8px 0" }}>
-            <input type="radio" name="location" value={l.slug} required /> {l.name}
-          </label>
-        ))}
-        <button type="submit">Continue</button>
+        <label style={{ display: "block", margin: "8px 0" }}>
+          Email
+          <br />
+          <input type="email" name="email" required autoComplete="email" />
+        </label>
+        <label style={{ display: "block", margin: "8px 0" }}>
+          Password
+          <br />
+          <input type="password" name="password" required autoComplete="current-password" />
+        </label>
+        <button type="submit">Sign in</button>
       </form>
+      <p>
+        Need an account? <a href="/signup">Create one</a>.
+      </p>
     </main>
   );
 }
