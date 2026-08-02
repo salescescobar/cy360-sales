@@ -1,0 +1,23 @@
+[
+  {
+    "locationSlug": "orlando",
+    "date": "2026-07-01",
+    "source": "gotab",
+    "grossAmountCents": 186775,
+    "breakdown": {
+      "food": 84250,
+      "beverage": 41525,
+      "alcohol": 61000
+    }
+  },
+  {
+    "locationSlug": "orlando",
+    "date": "2026-07-01",
+    "source": "courtreserve",
+    "grossAmountCents": 155000,
+    "breakdown": {
+      "pickleball": 120000,
+      "tennis": 35000
+    }
+  }
+]

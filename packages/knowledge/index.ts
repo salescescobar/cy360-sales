@@ -1,9 +1,10 @@
 /**
  * A · Knowledge Agent — the normalized Supabase sales warehouse for CY360.
- * Supabase (PostgREST) when SUPABASE_URL/SUPABASE_SERVICE_KEY are set; local JSON
- * fallback otherwise, so the whole pipeline runs with zero accounts on day one.
- * Row-level isolation between locations lives in Supabase RLS (supabase/migrations),
- * never only in the UI (invariant #1).
+ * Supabase (PostgREST) when SUPABASE_URL/SUPABASE_SERVICE_KEY are set AND the schema
+ * (supabase/migrations/0001_init.sql) is migrated; local JSON fallback otherwise, so the
+ * whole pipeline runs with zero accounts (and self-heals once the migration lands) —
+ * mirrors the pattern in packages/core/storage.ts. Row-level isolation between locations
+ * lives in Supabase RLS, never only in the UI (invariant #1).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -37,6 +38,20 @@ function supabaseConfigured(): boolean {
   return !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 }
 
+/** Thrown when Supabase is configured but the warehouse tables don't exist yet — distinct
+ *  from a real outage/auth error, and the only case that falls back to local storage. */
+class SchemaNotMigratedError extends Error {}
+
+let warnedSchemaNotMigrated = false;
+function warnSchemaNotMigrated(): void {
+  if (warnedSchemaNotMigrated) return;
+  warnedSchemaNotMigrated = true;
+  console.error(
+    "⚠ Supabase is configured but the warehouse schema isn't migrated yet — apply " +
+    "supabase/migrations/0001_init.sql. Falling back to local storage until then.",
+  );
+}
+
 async function supabaseRest(path: string, init: RequestInit = {}): Promise<Response> {
   const url = process.env.SUPABASE_URL!;
   const key = process.env.SUPABASE_SERVICE_KEY!;
@@ -44,7 +59,11 @@ async function supabaseRest(path: string, init: RequestInit = {}): Promise<Respo
     ...init,
     headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...(init.headers ?? {}) },
   });
-  if (!res.ok) throw new Error(`Supabase REST ${path} failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text();
+    if (res.status === 404 && body.includes("PGRST205")) throw new SchemaNotMigratedError(`table not found for ${path}`);
+    throw new Error(`Supabase REST ${path} failed: ${res.status} ${body}`);
+  }
   return res;
 }
 
@@ -55,15 +74,20 @@ function localDayPath(locationSlug: string, date: string): string {
 /** Upsert a day's normalized rows (one or both sources present). Merges with whatever already loaded that day. */
 export async function writeDay(locationSlug: string, date: string, rows: DailySalesRow[]): Promise<void> {
   if (supabaseConfigured()) {
-    await supabaseRest("daily_sales", {
-      method: "POST",
-      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify(rows.map(r => ({
-        location_slug: r.locationSlug, date: r.date, source: r.source,
-        gross_amount_cents: r.grossAmountCents, breakdown: r.breakdown,
-      }))),
-    });
-    return;
+    try {
+      await supabaseRest("daily_sales", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(rows.map(r => ({
+          location_slug: r.locationSlug, date: r.date, source: r.source,
+          gross_amount_cents: r.grossAmountCents, breakdown: r.breakdown,
+        }))),
+      });
+      return;
+    } catch (e) {
+      if (!(e instanceof SchemaNotMigratedError)) throw e;
+      warnSchemaNotMigrated();
+    }
   }
   mkdirSync(join(LOCAL_DIR, locationSlug), { recursive: true });
   const path = localDayPath(locationSlug, date);
@@ -75,12 +99,17 @@ export async function writeDay(locationSlug: string, date: string, rows: DailySa
 
 export async function readDay(locationSlug: string, date: string): Promise<DailySalesRow[]> {
   if (supabaseConfigured()) {
-    const res = await supabaseRest(`daily_sales?location_slug=eq.${locationSlug}&date=eq.${date}`);
-    const data = (await res.json()) as Array<Record<string, unknown>>;
-    return data.map(d => ({
-      locationSlug: d.location_slug as string, date: d.date as string, source: d.source as "gotab" | "courtreserve",
-      grossAmountCents: d.gross_amount_cents as number, breakdown: d.breakdown as Record<string, number>,
-    }));
+    try {
+      const res = await supabaseRest(`daily_sales?location_slug=eq.${locationSlug}&date=eq.${date}`);
+      const data = (await res.json()) as Array<Record<string, unknown>>;
+      return data.map(d => ({
+        locationSlug: d.location_slug as string, date: d.date as string, source: d.source as "gotab" | "courtreserve",
+        grossAmountCents: d.gross_amount_cents as number, breakdown: d.breakdown as Record<string, number>,
+      }));
+    } catch (e) {
+      if (!(e instanceof SchemaNotMigratedError)) throw e;
+      warnSchemaNotMigrated();
+    }
   }
   const path = localDayPath(locationSlug, date);
   return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : [];
@@ -90,16 +119,21 @@ export async function readDay(locationSlug: string, date: string): Promise<Daily
 export async function readMonth(locationSlug: string, month: string): Promise<Map<string, DailySalesRow[]>> {
   const result = new Map<string, DailySalesRow[]>();
   if (supabaseConfigured()) {
-    const res = await supabaseRest(`daily_sales?location_slug=eq.${locationSlug}&date=gte.${month}-01&date=lt.${nextMonth(month)}-01&order=date.asc`);
-    const data = (await res.json()) as Array<Record<string, unknown>>;
-    for (const d of data) {
-      const row: DailySalesRow = {
-        locationSlug: d.location_slug as string, date: d.date as string, source: d.source as "gotab" | "courtreserve",
-        grossAmountCents: d.gross_amount_cents as number, breakdown: d.breakdown as Record<string, number>,
-      };
-      result.set(row.date, [...(result.get(row.date) ?? []), row]);
+    try {
+      const res = await supabaseRest(`daily_sales?location_slug=eq.${locationSlug}&date=gte.${month}-01&date=lt.${nextMonth(month)}-01&order=date.asc`);
+      const data = (await res.json()) as Array<Record<string, unknown>>;
+      for (const d of data) {
+        const row: DailySalesRow = {
+          locationSlug: d.location_slug as string, date: d.date as string, source: d.source as "gotab" | "courtreserve",
+          grossAmountCents: d.gross_amount_cents as number, breakdown: d.breakdown as Record<string, number>,
+        };
+        result.set(row.date, [...(result.get(row.date) ?? []), row]);
+      }
+      return result;
+    } catch (e) {
+      if (!(e instanceof SchemaNotMigratedError)) throw e;
+      warnSchemaNotMigrated();
     }
-    return result;
   }
   const dir = join(LOCAL_DIR, locationSlug);
   if (!existsSync(dir)) return result;
@@ -120,16 +154,21 @@ function nextMonth(month: string): string {
 /** Every refresh attempt writes one trace row — complete, incomplete, or errored. Never skipped (invariant #4). */
 export async function traceRefresh(trace: RefreshTrace): Promise<void> {
   if (supabaseConfigured()) {
-    await supabaseRest("refresh_runs", {
-      method: "POST",
-      headers: { Prefer: "return=minimal" },
-      body: JSON.stringify({
-        location_slug: trace.locationSlug, date: trace.date, at: trace.at,
-        gotab_status: trace.gotabStatus, courtreserve_status: trace.courtreserveStatus,
-        status: trace.status, error: trace.error ?? null,
-      }),
-    });
-    return;
+    try {
+      await supabaseRest("refresh_runs", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          location_slug: trace.locationSlug, date: trace.date, at: trace.at,
+          gotab_status: trace.gotabStatus, courtreserve_status: trace.courtreserveStatus,
+          status: trace.status, error: trace.error ?? null,
+        }),
+      });
+      return;
+    } catch (e) {
+      if (!(e instanceof SchemaNotMigratedError)) throw e;
+      warnSchemaNotMigrated();
+    }
   }
   mkdirSync(LOCAL_DIR, { recursive: true });
   appendFileSync(TRACE_FILE, JSON.stringify(trace) + "\n");
@@ -137,14 +176,19 @@ export async function traceRefresh(trace: RefreshTrace): Promise<void> {
 
 export async function readTraces(locationSlug?: string): Promise<RefreshTrace[]> {
   if (supabaseConfigured()) {
-    const filter = locationSlug ? `?location_slug=eq.${locationSlug}&order=at.desc` : "?order=at.desc";
-    const res = await supabaseRest(`refresh_runs${filter}`);
-    const data = (await res.json()) as Array<Record<string, unknown>>;
-    return data.map(d => ({
-      locationSlug: d.location_slug as string, date: d.date as string, at: d.at as string,
-      gotabStatus: d.gotab_status as RefreshStatus, courtreserveStatus: d.courtreserve_status as RefreshStatus,
-      status: d.status as "complete" | "incomplete", error: (d.error as string | null) ?? undefined,
-    }));
+    try {
+      const filter = locationSlug ? `?location_slug=eq.${locationSlug}&order=at.desc` : "?order=at.desc";
+      const res = await supabaseRest(`refresh_runs${filter}`);
+      const data = (await res.json()) as Array<Record<string, unknown>>;
+      return data.map(d => ({
+        locationSlug: d.location_slug as string, date: d.date as string, at: d.at as string,
+        gotabStatus: d.gotab_status as RefreshStatus, courtreserveStatus: d.courtreserve_status as RefreshStatus,
+        status: d.status as "complete" | "incomplete", error: (d.error as string | null) ?? undefined,
+      }));
+    } catch (e) {
+      if (!(e instanceof SchemaNotMigratedError)) throw e;
+      warnSchemaNotMigrated();
+    }
   }
   if (!existsSync(TRACE_FILE)) return [];
   const traces = readFileSync(TRACE_FILE, "utf8").trim().split("\n").filter(Boolean).map(l => JSON.parse(l) as RefreshTrace);

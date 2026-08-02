@@ -25,8 +25,9 @@ export type LoopOutcome =
   | { status: "escalated"; reason: string; auditTrailUrl: string }
   | { status: "capped"; cap: "iterations" | "budget"; auditTrailUrl: string };
 
-type LoopsCfg = {
+export type LoopsCfg = {
   locations: Record<string, { active: boolean }>;
+  refresh?: { backfill_months?: number };
   sources: {
     gotab: { enabled: boolean; mode: "csv" | "api" };
     courtreserve: { enabled: boolean; mode: "csv" | "api"; locations?: string[] };
@@ -85,10 +86,20 @@ export async function refreshLocationDay(locationSlug: string, date: string, cfg
     error = [error, `courtreserve: ${(e as Error).message}`].filter(Boolean).join("; ");
   }
 
-  if (rows.length) await writeDay(locationSlug, date, rows);
+  // Persistence failures (e.g. the warehouse schema isn't migrated yet) must never crash
+  // the whole batch — every OTHER location/date still needs its refresh attempt and trace.
+  try {
+    if (rows.length) await writeDay(locationSlug, date, rows);
+  } catch (e) {
+    error = [error, `warehouse write: ${(e as Error).message}`].filter(Boolean).join("; ");
+  }
 
   const status: "complete" | "incomplete" = gotabStatus === "loaded" && courtreserveStatus === "loaded" ? "complete" : "incomplete";
-  await traceRefresh({ locationSlug, date, at: new Date().toISOString(), gotabStatus, courtreserveStatus, status, error });
+  try {
+    await traceRefresh({ locationSlug, date, at: new Date().toISOString(), gotabStatus, courtreserveStatus, status, error });
+  } catch (e) {
+    console.error(`refreshLocationDay: could not write trace for ${locationSlug} ${date}: ${(e as Error).message}`);
+  }
 
   if (status === "incomplete") {
     await notifySlack(
