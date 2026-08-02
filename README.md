@@ -33,7 +33,7 @@ issue with the Spec template, adapt the nouns, and get CEO approval before writi
 
 ## Setup (once per project)
 
-- [ ] Set repo secrets: `ANTHROPIC_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SLACK_WEBHOOK_URL`
+- [ ] Set repo secrets: `ANTHROPIC_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SLACK_WEBHOOK_URL`, `CRON_SECRET` (authenticates Vercel Cron → `/api/cron/*`)
 - [ ] Edit `config.yaml`: project name, monthly budget, loop caps
 - [ ] Create the GitHub Project board from the org template (columns: Spec draft → CEO approval → Building → In review → Shipped)
 - [ ] Connect Vercel to `apps/web`

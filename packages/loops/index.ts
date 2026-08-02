@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { ingestGotabDay } from "../skills/gotab-ingest/index";
 import { ingestCourtReserveDay } from "../skills/courtreserve-ingest/index";
-import { writeDay, traceRefresh, type DailySalesRow, type RefreshStatus } from "../knowledge/index";
+import { writeDay, traceRefresh, readTraces, type DailySalesRow, type RefreshStatus } from "../knowledge/index";
 import { repoPath } from "../core/paths";
 
 export type Trigger =
@@ -146,6 +146,19 @@ export function checkMissedRefresh(now: Date, traces: Array<{ locationSlug: stri
   const traced = new Set(traces.filter(t => t.date === expectedDate).map(t => t.locationSlug));
   const missedLocations = activeLocations(cfg).filter(slug => !traced.has(slug));
   return { expectedDate, missedLocations };
+}
+
+/** Full watchdog check + Slack alert, shared by scripts/watchdog.ts (manual/CI cron) and
+ *  apps/web's Vercel Cron endpoint (/api/cron/watchdog) so the alert text lives in one place. */
+export async function runWatchdog(now: Date = new Date(), cfg: LoopsCfg = loadCfg()): Promise<WatchdogResult> {
+  const traces = await readTraces();
+  const result = checkMissedRefresh(now, traces, cfg);
+  if (result.missedLocations.length > 0) {
+    await notifySlack(
+      `🚨 CY360 Sales: no refresh ran for ${result.expectedDate} at ${result.missedLocations.join(", ")} — the 6:00 a.m. ET cron may not have fired.`,
+    );
+  }
+  return result;
 }
 
 export async function run(trigger: Trigger, playbook: string): Promise<LoopOutcome> {

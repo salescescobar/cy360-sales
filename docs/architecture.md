@@ -6,12 +6,16 @@
               A knowledge.{writeDay,readDay,readMonth,traceRefresh} ──► Supabase (RLS)
                                                                  │        or local JSON fallback
                                                                  ▼
-  Vercel Cron (0 6 * * * ET) ──► E loop.run() ──► playbooks/daily-sales-refresh.md
+  Vercel Cron (apps/web/vercel.json, ~6:00 ET) ──► GET /api/cron/refresh ──► loop.run() ──►
+                                      playbooks/daily-sales-refresh.md
                                       │
                                       ├─► skills/gotab-ingest (F&B, CSV/API)
                                       └─► skills/courtreserve-ingest (courts, CSV/API)
                                       └─► skills/metrics (daily + monthly aggregates)
-  Vercel Cron (0630 ET) ──► scripts/watchdog.ts ──► Slack #ops if the 6:00 run never fired
+  Vercel Cron (~6:30 ET) ──► GET /api/cron/watchdog ──► Slack #ops if the 6:00 run never fired
+    (Vercel Cron schedules are UTC-only, so apps/web/vercel.json pins 10:00/10:30 UTC —
+    the EDT wall-clock target; it drifts an hour during EST. scripts/watchdog.ts runs the
+    same check by hand/CI outside Vercel.)
   ──────────────────────────────────────────────────────────────────────────
   C control plane: config.yaml (locations, sources, refresh cron/backfill) + Langfuse + E2E (CI)
   D dev agent: .github/workflows/ci.yml (Claude review + standards)

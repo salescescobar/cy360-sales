@@ -5,22 +5,17 @@
  * cron never fired). A run that fired and came back incomplete is already reported by
  * the refresh playbook itself; this only catches "nothing happened".
  */
-import { readTraces } from "../packages/knowledge/index";
-import { checkMissedRefresh, notifySlack, loadCfg } from "../packages/loops/index";
+import { runWatchdog } from "../packages/loops/index";
 import { loadLocalEnv } from "../packages/core/env";
 loadLocalEnv();
 
 async function main() {
-  const traces = await readTraces();
-  const { expectedDate, missedLocations } = checkMissedRefresh(new Date(), traces, loadCfg());
-
+  const { expectedDate, missedLocations } = await runWatchdog();
   if (missedLocations.length === 0) {
     console.log(`✓ watchdog: every active location has a refresh trace for ${expectedDate}`);
     return;
   }
-  const msg = `🚨 CY360 Sales: no refresh ran for ${expectedDate} at ${missedLocations.join(", ")} — the 6:00 a.m. ET cron may not have fired.`;
-  console.error(msg);
-  await notifySlack(msg);
+  console.error(`🚨 no refresh ran for ${expectedDate} at ${missedLocations.join(", ")} — Slack notified.`);
   process.exitCode = 1;
 }
 main().catch(e => { console.error("watchdog failed:", e); process.exitCode = 1; });
