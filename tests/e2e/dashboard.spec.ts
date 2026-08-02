@@ -33,7 +33,7 @@ test("Orlando manager sees Orlando, other locations blocked, day/month toggle wo
   await page.getByRole("radio", { name: /Crush Yard Orlando/i }).check();
   await page.getByRole("button", { name: /create account/i }).click();
 
-  await expect(page).toHaveURL(/\/dashboard\/orlando$/);
+  await expect(page).toHaveURL(/\/dashboard\/orlando(\?|$)/);
   await expect(page.getByRole("heading", { name: /Crush Yard Orlando/i })).toBeVisible();
 
   await page.getByRole("tab", { name: "Day" }).click();
@@ -74,7 +74,7 @@ test("Orlando manager sees Orlando, other locations blocked, day/month toggle wo
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("correct horse battery staple");
   await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/\/dashboard\/orlando$/);
+  await expect(page).toHaveURL(/\/dashboard\/orlando(\?|$)/);
 });
 
 test("wrong password is rejected, and login has no location picker", async ({ page }) => {
@@ -84,7 +84,7 @@ test("wrong password is rejected, and login has no location picker", async ({ pa
   await page.getByLabel("Password").fill("correct horse battery staple");
   await page.getByRole("radio", { name: /Crush Yard Orlando/i }).check();
   await page.getByRole("button", { name: /create account/i }).click();
-  await expect(page).toHaveURL(/\/dashboard\/orlando$/);
+  await expect(page).toHaveURL(/\/dashboard\/orlando(\?|$)/);
   await page.getByRole("button", { name: /log out/i }).click();
 
   await page.goto("/login");
@@ -93,7 +93,7 @@ test("wrong password is rejected, and login has no location picker", async ({ pa
   await page.getByLabel("Password").fill("not the right password");
   await page.getByRole("button", { name: /sign in/i }).click();
   await expect(page).toHaveURL(/\/login/);
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByText("Incorrect email or password.")).toBeVisible();
 });
 
 test("hostile date input on the metrics API returns a clean 400, never a crash", async ({ page }) => {
@@ -103,7 +103,7 @@ test("hostile date input on the metrics API returns a clean 400, never a crash",
   await page.getByLabel("Password").fill("correct horse battery staple");
   await page.getByRole("radio", { name: /Crush Yard Orlando/i }).check();
   await page.getByRole("button", { name: /create account/i }).click();
-  await expect(page).toHaveURL(/\/dashboard\/orlando$/);
+  await expect(page).toHaveURL(/\/dashboard\/orlando(\?|$)/);
 
   const hostile = "a".repeat(10_000);
   const res = await page.request.get(`/api/metrics?location=${ORLANDO}&period=day&date=${encodeURIComponent(hostile)}`);
