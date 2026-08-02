@@ -20,6 +20,9 @@ function priorMonthOf(month: string): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_RE = /^\d{4}-\d{2}$/;
+
 /**
  * Scoped to the signed-in manager's own location (invariant #1) — this check is
  * defense in depth; the hard boundary is Supabase RLS (supabase/migrations/0001_init.sql)
@@ -40,21 +43,32 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "unknown or inactive location" }, { status: 404 });
   }
 
+  // date/month reach the filesystem (local fallback) and a Supabase filter string (live
+  // warehouse) — reject anything that isn't the exact shape before either sees it, so a
+  // malformed or oversized value can never become a path-traversal or query-injection input.
   const today = new Date().toISOString().slice(0, 10);
-
-  if (period === "day") {
-    const date = dateParam ?? today;
-    const rows = await readDay(location, date);
-    return NextResponse.json(toDailyMetrics(date, rows));
+  const re = period === "day" ? DATE_RE : MONTH_RE;
+  const value = dateParam ?? (period === "day" ? today : today.slice(0, 7));
+  if (!re.test(value)) {
+    return NextResponse.json({ error: `invalid ${period === "day" ? "date" : "month"} — expected ${period === "day" ? "YYYY-MM-DD" : "YYYY-MM"}` }, { status: 400 });
   }
 
-  const month = dateParam ?? today.slice(0, 7);
-  const daysMap = await readMonth(location, month);
-  const days = [...daysMap.entries()].map(([d, rows]) => toDailyMetrics(d, rows));
+  try {
+    if (period === "day") {
+      const rows = await readDay(location, value);
+      return NextResponse.json(toDailyMetrics(value, rows));
+    }
 
-  const priorMonth = priorMonthOf(month);
-  const priorDaysMap = await readMonth(location, priorMonth);
-  const priorDays = [...priorDaysMap.entries()].map(([d, rows]) => toDailyMetrics(d, rows));
+    const daysMap = await readMonth(location, value);
+    const days = [...daysMap.entries()].map(([d, rows]) => toDailyMetrics(d, rows));
 
-  return NextResponse.json(aggregateMonthly(month, days, priorDays));
+    const priorMonth = priorMonthOf(value);
+    const priorDaysMap = await readMonth(location, priorMonth);
+    const priorDays = [...priorDaysMap.entries()].map(([d, rows]) => toDailyMetrics(d, rows));
+
+    return NextResponse.json(aggregateMonthly(value, days, priorDays));
+  } catch {
+    // Never surface a raw stack trace to the dashboard — the client shows this as an alert.
+    return NextResponse.json({ error: "couldn't load metrics — try again shortly" }, { status: 500 });
+  }
 }

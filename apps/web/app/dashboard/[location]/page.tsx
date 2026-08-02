@@ -32,7 +32,12 @@ export default async function DashboardPage({ params }: { params: Promise<{ loca
 
   return (
     <main>
-      <h1>{info.name} — Sales</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h1>{info.name} — Sales</h1>
+        <form method="POST" action="/api/logout">
+          <button type="submit">Log out</button>
+        </form>
+      </div>
       <DashboardClient location={location} />
     </main>
   );
