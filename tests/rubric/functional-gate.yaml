@@ -1,24 +1,24 @@
-# Judge rubric DERIVED FROM docs/spec.md — the spec is the exam.
-# The builder never reads this file. 3 holdouts rotate per iteration.
 threshold: 90
 core:
-  - { id: loads_fast,        blocker: true,  desc: "Dashboard loads under 3s with no console errors" }
-  - { id: manager_signin,    blocker: true,  desc: "A manager signs in with the seeded credentials and lands on their own location dashboard. Do NOT require a public signup flow — accounts are provisioned, not self-served" }
-  - { id: location_isolation, blocker: true, desc: "SHALL NEVER #1: signed in for Orlando, any attempt to view another location's data is refused (URL tampering included)" }
-  - { id: daily_view,        blocker: true,  desc: "Day view shows that date's sales totals and breakdown for a date that has data" }
-  - { id: monthly_view,      blocker: true,  desc: "Month view shows monthly totals plus a prior-period comparative" }
-  - { id: incomplete_day,    blocker: true,  desc: "A day missing a source is labelled incomplete and excluded from comparatives — partial totals are never shown as final" }
-  - { id: view_toggle,       blocker: true,  desc: "Switching day/month and changing the date works, and survives a reload" }
-  - { id: no_dead_ends,      blocker: true,  desc: "No blank screens, raw 404/500 pages, or inert buttons anywhere reachable" }
-  - { id: clear_errors,      blocker: true,  desc: "Errors and unauthenticated access show accurate, human messages — never a stack trace or a misleading claim" }
-  - { id: hostile_inputs,    blocker: true,  desc: "Malformed dates, path-traversal strings and 10k-char inputs return a clean error, never a crash" }
-  - { id: security_gate,     blocker: true,  desc: "Secret scan, dependency audit and destructive-op linter all green" }
-  - { id: responsive,        blocker: false, desc: "Usable at 390px and on desktop" }
-  - { id: deducible,         blocker: false, desc: "A location manager who never read the spec can answer 'how did we do yesterday?' unaided" }
+  - { id: loads_fast,          blocker: true,  desc: "Dashboard loads under 3s, no console errors" }
+  - { id: admin_provisions,    blocker: true,  desc: "Admin signs in with the seeded credentials from README and can create a manager account. There must be NO public self-service signup link on /login" }
+  - { id: upload_flow,         blocker: true,  desc: "Upload a CSV at /import: source and dates are detected, a preview of parsed totals is shown, and data only lands after confirming" }
+  - { id: upload_visible,      blocker: true,  desc: "After confirming an upload, those totals appear on the dashboard for that date without any terminal step" }
+  - { id: reupload_replaces,   blocker: true,  desc: "Re-uploading the same date replaces the row and the preview warns about it — no duplicated totals" }
+  - { id: bad_file_rejected,   blocker: true,  desc: "A malformed or empty CSV is rejected with a specific message and writes nothing" }
+  - { id: location_isolation,  blocker: true,  desc: "SHALL NEVER 1: a manager signed in for Orlando cannot see another location, including by editing the URL" }
+  - { id: admin_pages_guarded, blocker: true,  desc: "SHALL NEVER 5: /import and /admin are refused for a manager session and for no session" }
+  - { id: daily_view,          blocker: true,  desc: "Day view shows totals and per-source breakdown for a date that has data" }
+  - { id: monthly_like4like,   blocker: true,  desc: "Month view compares the same number of elapsed days against the prior month and labels it in words — a full-vs-partial percentage is a FAILURE" }
+  - { id: incomplete_day,      blocker: true,  desc: "A date with only one source is labelled incomplete and excluded from comparatives" }
+  - { id: clear_errors,        blocker: true,  desc: "Errors and unauthenticated access show accurate human messages, never a stack trace or a misleading claim" }
+  - { id: hostile_inputs,      blocker: true,  desc: "Malformed dates, path-traversal strings, 10k-char inputs and a 10MB file return clean errors, never a crash" }
+  - { id: security_gate,       blocker: true,  desc: "Secret scan, dependency audit and destructive-op linter green" }
+  - { id: responsive,          blocker: false, desc: "Usable at 390px and desktop" }
 holdout_pool:
   - { id: h_refresh_mid_flow, desc: "Reloading mid-flow preserves the selected view and date" }
-  - { id: h_deep_link,        desc: "A deep link to an inner page renders or redirects sensibly — never a raw 404" }
+  - { id: h_deep_link,        desc: "A deep link to an inner page renders or redirects sensibly, never a raw 404" }
   - { id: h_empty_state,      desc: "A date with no data explains itself instead of looking broken" }
-  - { id: h_back_button,      desc: "Browser back behaves sanely after switching views" }
-  - { id: h_slow_network,     desc: "Throttled network shows loading states, not blank panels" }
-  - { id: h_stale_session,    desc: "An expired or cleared session sends the user to sign in with an accurate message" }
+  - { id: h_double_submit,    desc: "Double-clicking confirm does not write the same upload twice" }
+  - { id: h_back_button,      desc: "Browser back behaves sanely after an upload" }
+  - { id: h_stale_session,    desc: "A cleared session sends the user to sign in with an accurate message" }

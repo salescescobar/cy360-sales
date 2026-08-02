@@ -85,5 +85,5 @@ refresh:
   tz: America/New_York
   backfill_months: 12
 sources:
-  gotab:        { enabled: true, mode: csv }   # csv now, api when the key arrives
-  courtreserve: { enabled: true, mode: csv, locations: [orlando] }
+  gotab:        { enabled: true, mode: upload }   # csv now, api when the key arrives
+  courtreserve: { enabled: true, mode: upload, locations: [orlando] }
