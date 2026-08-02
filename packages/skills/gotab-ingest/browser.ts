@@ -49,11 +49,28 @@ export async function fetchGotabSalesText(locationSlug: string, date: string): P
       await emailInput.fill(user);
       await page.locator('input[type="password"]').first().fill(pass);
       await page.locator('button[type="submit"], input[type="submit"]').first().click();
-      await page.waitForLoadState("networkidle");
+      // NOT networkidle: GoTab streams telemetry (Datadog RUM, OTel), so the network never
+      // goes idle and any such wait burns its full timeout. Wait for navigation instead.
+      await page.waitForLoadState("domcontentloaded");
+      await page.waitForTimeout(2000);
     }
 
-    await page.goto(gotabSalesUrl(locationSlug, date), { waitUntil: "networkidle" });
-    return await page.locator("main").innerText();
+    await page.goto(gotabSalesUrl(locationSlug, date), { waitUntil: "domcontentloaded", timeout: 60000 });
+    // Wait for the report itself, not for the network: the summary is server-rendered.
+    await page.waitForFunction(
+      () => (document.querySelector("main")?.textContent ?? "").includes("Gross Sales"),
+      undefined, { timeout: 45000 },
+    ).catch(() => undefined);
+    const text = await page.locator("main").innerText();
+    // Fail LOUDLY and specifically when we were bounced to the login page, so the trace row
+    // says "login failed" instead of an opaque timeout.
+    if (!text.includes("Gross Sales")) {
+      const looksLikeLogin = /sign in|log in|password/i.test(text);
+      throw new Error(looksLikeLogin
+        ? "gotab login failed — check GOTAB_USER/GOTAB_PASS, or the account may require 2FA"
+        : `gotab sales page did not render a summary for ${date} (got ${text.length} chars)`);
+    }
+    return text;
   } finally {
     await browser.close();
   }
