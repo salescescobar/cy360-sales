@@ -67,8 +67,18 @@ export default function DashboardClient({ location }: { location: string }) {
     setError(null);
     const when = period === "day" ? date : month;
     fetch(`/api/metrics?location=${encodeURIComponent(location)}&period=${period}&date=${encodeURIComponent(when)}`)
-      .then(async r => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`); return r.json(); })
-      .then(data => { if (cancelled) return; if (period === "day") setDaily(data); else setMonthly(data); })
+      .then(async r => {
+        // A session that was valid on page load can go stale mid-visit (cookie cleared,
+        // secret rotated, account removed elsewhere). Never show that as a raw fetch
+        // error — send the manager back to sign in, the same place a fresh visit lands.
+        if (r.status === 401 || r.status === 403) {
+          window.location.href = "/login";
+          return null;
+        }
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => { if (cancelled || data == null) return; if (period === "day") setDaily(data); else setMonthly(data); })
       .catch(e => { if (!cancelled) setError(String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };

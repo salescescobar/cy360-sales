@@ -119,3 +119,27 @@ test("an active location's dashboard requires signing in first", async ({ browse
   await expect(page.getByRole("heading", { name: /sign in required/i })).toBeVisible();
   await context.close();
 });
+
+test("a session that goes stale mid-visit sends the manager back to sign in, not a raw error", async ({ page, context }) => {
+  const email = uniqueEmail("stale-session");
+  await page.goto("/signup");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("correct horse battery staple");
+  await page.getByRole("radio", { name: /Crush Yard Orlando/i }).check();
+  await page.getByRole("button", { name: /create account/i }).click();
+  await expect(page).toHaveURL(/\/dashboard\/orlando(\?|$)/);
+
+  // Corrupt the signed session cookie in place (simulates a rotated secret / tampering)
+  // without navigating away — the manager is mid-visit when it goes stale.
+  const cookies = await context.cookies();
+  const session = cookies.find(c => c.name === "manager_session");
+  if (!session) throw new Error("manager_session cookie missing after signup");
+  await context.addCookies([{ ...session, value: session.value.slice(0, -4) + "0000" }]);
+
+  // dispatchEvent, not click(): the handler triggers a same-tab client-side redirect
+  // (window.location), and Playwright's post-click actionability checks hang racing
+  // that navigation — a Playwright/Chromium quirk, not app behavior under test here.
+  await page.getByRole("tab", { name: "Month" }).dispatchEvent("click");
+  await page.waitForURL(/\/login$/);
+  await expect(page.getByText(/couldn't load metrics/i)).toHaveCount(0);
+});
