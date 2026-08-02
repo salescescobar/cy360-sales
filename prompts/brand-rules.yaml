@@ -1,0 +1,6 @@
+# Client brand rules — versioned, reviewed like code. These feed brand-guardrails.
+banned_words: ["insane", "kill", "hate"]
+max_caption_len: 150
+max_emojis: 2
+require_logo: true
+block_minor_faces: true      # SHALL NEVER rule #1 — fail closed without screening

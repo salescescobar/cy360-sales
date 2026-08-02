@@ -1,0 +1,75 @@
+# C · Control Plane — instrumentation, on by default
+project: CHANGE_ME
+budget:
+  monthly_usd: 500
+  alert_at_pct: 80
+evals:
+  enabled: true
+  gate: true                  # CI blocks merge if quality drops
+  baseline_score: 0.80
+e2e:
+  enabled: true               # Playwright smoke tests in CI
+tracing:
+  provider: langfuse
+  sample_rate: 1.0
+loops:
+  enabled: true
+  supervised: true            # every new loop starts supervised
+  max_iterations: 8
+  budget_per_run_usd: 2.00
+  checkpoints:
+    - spend_money
+    - send_external_message   # posting to social lives here
+    - delete_data
+deploy:
+  auto_to: preview             # every merge -> preview automatically
+  production: gated            # promotion needs: tests + evals + security green + human OK
+autonomous_build:              # the loop that builds the product from the approved spec
+  enabled: true
+  max_iterations: 15
+  budget_usd: 40
+  budget_alert_pct: 80         # Slack warning at this % — the loop keeps working
+  on_budget_exceeded: notify_and_pause   # past 100%: PAUSE + ask the human; approval resumes THIS run
+  gate_threshold: 90           # score /100; all blockers must pass
+  blockers_include:            # a functional pass is not enough
+    - security                 # secret scan + deps + destructive-op linter
+    - cost                     # inside budget_usd
+  holdout_checks: 3            # rotated per run; the builder can never overfit the gate
+  escalate_if_stuck_at: 3      # 3 rounds within 5 points of the gate -> escalate to a human
+  log_scores_to: langfuse      # track judge-vs-human agreement over time
+autonomy:                      # earned with data, never by opinion
+  level_up_requires:   { approval_rate_pct: 95, working_days: 10 }
+  level_down_triggers: { any_sev1: true, days_below_80_pct: 2 }
+  irreversible_actions: always_human   # at EVERY level, no exceptions
+skills:                       # paid skills declared so the dashboard sees their cost
+  web_research: { enabled: false, provider: tavily }
+  firecrawl:    { enabled: false }
+  vision:       { enabled: false, gpu: modal }
+footage:
+  input: /tmp/court2.mp4      # the client video the loop processes; FOOTAGE_PATH env overrides
+  logo: ""                    # optional local logo path for the overlay
+alerts:
+  slack_channel: "#ops-CHANGE_ME"
+models:                          # the router decides. Never hardcode a model in code.
+  # Adopting a new model (e.g. a future opus-5): `npm run models:check` must list it
+  # under YOUR key, verify pricing on anthropic.com/pricing, then edit ONE line here.
+  # News posts and third-party catalogs don't count; only /v1/models does.
+  routing: cheapest_capable      # start cheap, escalate only on failed verification
+  cheap:   claude-haiku-4-5
+  mid:     claude-sonnet-4-6
+  top:     claude-opus-4-8
+  frontier: claude-fable-5     # Mythos-class, above Opus — architect ceiling only
+  classes:                       # task class -> starting rung : ceiling
+    classify:  { start: cheap, max: cheap }
+    extract:   { start: cheap, max: mid }
+    format:    { start: cheap, max: mid }
+    summarize: { start: cheap, max: mid }
+    reason:    { start: mid,   max: top }
+    code:      { start: mid,   max: top }
+    judge:     { start: mid,   max: top, different_family_than: code }
+    architect: { start: top,   max: frontier }
+  escalate_after_failed_attempts: 1
+  prompt_caching: true
+  batch_api_for: [ summarize, format, extract ]   # non-interactive work
+  max_cost_per_call_usd: 0.75
+  alert_if_escalation_rate_over_pct: 20           # a spec/prompt problem, not a budget one

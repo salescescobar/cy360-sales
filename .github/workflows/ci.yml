@@ -1,0 +1,82 @@
+name: CI — Dev Agent (D) + Evals Gate (C)
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  claude-review:
+    name: "D · Code review + standards checklist"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Claude Code review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this PR against CLAUDE.md. Enforce:
+            1) No direct model/vector-DB calls outside packages/{knowledge,core,loops}
+            2) Prompts referenced from /prompts, not inlined
+            3) PR description references a spec issue (Spec: #NN)
+            4) Loops read caps from config.yaml and have exit conditions
+            5) No secrets, no PII in logs
+            Comment findings; request changes if any rule is violated.
+
+  evals-gate:
+    name: "C · Quality gate — evals must not drop"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm ci
+      - name: Run evals (promptfoo)
+        run: npx promptfoo eval -c evals/promptfooconfig.yaml --fail-on-error
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  e2e:
+    name: "C · E2E tests (Playwright)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run selftest
+      - run: npm run loop:dry
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+
+  security:
+    name: "C · Security gate (secrets, deps, destructive ops)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm ci
+      - name: Dependency vulnerabilities
+        run: npm audit --omit=dev --audit-level=high
+      - name: Destructive-operation linter
+        run: |
+          # Irreversible operations must sit behind a checkpoint, never inline.
+          if grep -rInE "(DROP +TABLE|TRUNCATE |rm +-rf|\.delete\(|deleteMany|destroy\()" \
+               --include=*.ts --include=*.tsx --include=*.sql \
+               --exclude-dir=node_modules --exclude-dir=.next \
+               packages apps scripts \
+             | grep -v "requireCheckpoint" ; then
+            echo "::error::Destructive operation without requireCheckpoint(). See CLAUDE.md."
+            exit 1
+          fi

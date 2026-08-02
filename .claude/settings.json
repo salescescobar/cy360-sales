@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit", "Write",
+      "Bash(npm run:*)", "Bash(npm test:*)", "Bash(npx tsc:*)", "Bash(npx playwright:*)",
+      "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)", "Bash(git diff:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)", "Bash(git push:*)", "Bash(curl:*)",
+      "Read(.env.local)", "Read(.env*)"
+    ]
+  }
+}

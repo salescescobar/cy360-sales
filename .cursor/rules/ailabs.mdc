@@ -1,0 +1,14 @@
+---
+description: AI Labs by Humans engineering standards (mirror of CLAUDE.md)
+alwaysApply: true
+---
+This file mirrors CLAUDE.md so no editor bypasses our standards. If they ever
+disagree, CLAUDE.md wins and this file must be updated in the same PR.
+
+- Retrieval only through packages/knowledge (knowledge.ingest/query). Answers carry citations.
+- User-facing model calls only through packages/core (core.run). Guardrails + permissions there.
+- Background automation only through packages/loops (loop.run) with caps from config.yaml.
+- Prompts live in /prompts, playbooks in /playbooks. Never inline long prompts.
+- New capability = a skill in packages/skills, never a new agent.
+- No spec, no code. Every PR references its spec issue.
+- Secrets via env vars only. Never log PII.

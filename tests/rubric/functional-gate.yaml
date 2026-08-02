@@ -1,0 +1,23 @@
+# The judge's rubric. LIVES WITH THE JUDGE ONLY — the builder never reads this file.
+# 10 core checks + a holdout pool; 3 holdouts rotate per iteration (anti-overfit).
+threshold: 90
+core:
+  - { id: loads_fast,      blocker: true,  desc: "App loads < 3s with no console errors" }
+  - { id: main_flow,       blocker: true,  desc: "Spec's main flow completes end to end unaided" }
+  - { id: no_dead_ends,    blocker: true,  desc: "No dead screens, internal 404s, or inert buttons" }
+  - { id: clear_errors,    blocker: true,  desc: "User errors show clear messages, never stack traces" }
+  - { id: auth,            blocker: true,  desc: "Signup, login, logout; session persists" }
+  - { id: persistence,     blocker: true,  desc: "Create → reload → still there" }
+  - { id: responsive,      blocker: false, desc: "Usable at 390px and desktop" }
+  - { id: ai_evals,        blocker: true,  desc: "RAGAS/Promptfoo above threshold (when AI applies)" }
+  - { id: hostile_inputs,  blocker: true,  desc: "XSS strings, empty fields, 10k-char inputs don't break it" }
+  - { id: deducible,       blocker: false, desc: "A tester without the spec can deduce and use it" }
+  - { id: security_gate,   blocker: true,  desc: "Secret scan + deps audit + destructive-op linter green" }
+  - { id: cost_gate,       blocker: true,  desc: "Run cost within budget_usd" }
+holdout_pool:
+  - { id: h_refresh_mid_flow, desc: "Refreshing mid-flow doesn't lose state or crash" }
+  - { id: h_double_submit,    desc: "Double-clicking submit doesn't duplicate the action" }
+  - { id: h_slow_network,     desc: "Throttled network shows loading states, not blank screens" }
+  - { id: h_deep_link,        desc: "A deep link to an inner page renders (no white screen)" }
+  - { id: h_empty_state,      desc: "Zero-data states explain themselves" }
+  - { id: h_back_button,      desc: "Browser back behaves sanely after actions" }

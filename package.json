@@ -1,0 +1,39 @@
+{
+  "name": "ailabs-product-template",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "evals": "promptfoo eval -c evals/promptfooconfig.yaml",
+    "e2e": "playwright test",
+    "loop:dry": "tsx scripts/run-loop.ts --dry-run",
+    "loop:run": "tsx scripts/run-loop.ts",
+    "loop:status": "tsx scripts/loop-status.ts",
+    "loop:auto": "tsx scripts/autonomous-loop.ts",
+    "cost:report": "tsx scripts/cost-report.ts",
+    "selftest": "tsx scripts/selftest.ts",
+    "models:check": "tsx scripts/check-models.ts"
+  },
+  "dependencies": {
+    "yaml": "^2.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^19.0.0",
+    "promptfoo": "^0.100.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.2"
+  },
+  "overrides": {
+    "postcss": "^8.5.18",
+    "sharp": "^0.35.0"
+  },
+  "version": "2.3.1"
+}
