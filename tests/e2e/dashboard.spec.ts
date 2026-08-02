@@ -42,6 +42,22 @@ test("Orlando manager sees Orlando, other locations blocked, day/month toggle wo
   await page.goto("/dashboard/nashville");
   await expect(page.getByRole("heading", { name: /access denied|not found/i })).toBeVisible();
   await expect(page.getByText(/Crush Yard Nashville/)).toHaveCount(0);
+
+  // Logout clears the session — the dashboard is no longer reachable afterward.
+  await page.goto("/dashboard/orlando");
+  await page.getByRole("button", { name: /log out/i }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await page.goto("/dashboard/orlando");
+  await expect(page.getByRole("heading", { name: /access denied/i })).toBeVisible();
+});
+
+test("hostile date input on the metrics API returns a clean 400, never a crash", async ({ request }) => {
+  await request.post("/api/login", { form: { location: ORLANDO } });
+  const hostile = "a".repeat(10_000);
+  const res = await request.get(`/api/metrics?location=${ORLANDO}&period=day&date=${encodeURIComponent(hostile)}`);
+  expect(res.status()).toBe(400);
+  const body = await res.json();
+  expect(body.error).toBeTruthy();
 });
 
 test("an active location's dashboard is blocked without a matching session", async ({ browser }) => {
