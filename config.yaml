@@ -81,6 +81,7 @@ locations:
   mt_pleasant: { active: false }
 refresh:
   cron: "0 6 * * *"
+  watchdog_cron: "30 6 * * *"   # 30 min after refresh.cron — alerts Slack if it never fired
   tz: America/New_York
   backfill_months: 12
 sources:

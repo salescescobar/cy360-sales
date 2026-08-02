@@ -7,6 +7,7 @@
 import { readFileSync, mkdirSync, appendFileSync } from "node:fs";
 import { parse } from "yaml";
 import { z } from "zod";
+import { repoPath } from "./paths";
 
 export const TaskClass = z.enum(["classify","extract","format","summarize","reason","code","judge","architect"]);
 export type TaskClass = z.infer<typeof TaskClass>;
@@ -22,7 +23,7 @@ type ModelsCfg = {
 
 let _cfg: ModelsCfg | null = null;
 function cfg(): ModelsCfg {
-  if (!_cfg) _cfg = (parse(readFileSync("config.yaml", "utf8")) as { models: ModelsCfg }).models;
+  if (!_cfg) _cfg = (parse(readFileSync(repoPath("config.yaml"), "utf8")) as { models: ModelsCfg }).models;
   return _cfg;
 }
 
@@ -61,8 +62,8 @@ export function estimateCostUsd(model: string, inputTokens: number, outputTokens
 }
 
 function logCost(entry: object) {
-  mkdirSync(".loop", { recursive: true });
-  appendFileSync(".loop/costs.jsonl", JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
+  mkdirSync(repoPath(".loop"), { recursive: true });
+  appendFileSync(repoPath(".loop", "costs.jsonl"), JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
 }
 
 /** Execute a task at the routed rung. Requires ANTHROPIC_API_KEY; cost is logged either way. */

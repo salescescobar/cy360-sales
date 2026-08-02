@@ -1,43 +1,152 @@
 /**
- * A · Knowledge Agent — the memory of the product.
- * All retrieval flows through here. Every answer carries citations.
+ * A · Knowledge Agent — the normalized Supabase sales warehouse for CY360.
+ * Supabase (PostgREST) when SUPABASE_URL/SUPABASE_SERVICE_KEY are set; local JSON
+ * fallback otherwise, so the whole pipeline runs with zero accounts on day one.
+ * Row-level isolation between locations lives in Supabase RLS (supabase/migrations),
+ * never only in the UI (invariant #1).
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
+import { repoPath } from "../core/paths";
 
-export const Citation = z.object({
-  sourceId: z.string(),
-  title: z.string(),
-  url: z.string().optional(),
-  snippet: z.string(),
+export const DailySalesRow = z.object({
+  locationSlug: z.string(),
+  date: z.string(),
+  source: z.enum(["gotab", "courtreserve"]),
+  grossAmountCents: z.number().int(),
+  breakdown: z.record(z.number()),
 });
-export const Answer = z.object({
-  text: z.string(),
-  citations: z.array(Citation).min(1), // no citations = invalid answer
-  confidence: z.number().min(0).max(1),
-});
-export type Answer = z.infer<typeof Answer>;
+export type DailySalesRow = z.infer<typeof DailySalesRow>;
 
-export type Source =
-  | { kind: "document"; path: string }
-  | { kind: "url"; url: string }
-  | { kind: "database"; table: string }
-  | { kind: "video"; url: string };            // vision extension
-export type QueryOpts = {
-  user: { id: string; role: string };
-  webResearch?: boolean;   // skill: search + Firecrawl extraction (opt-in per spec)
-  video?: boolean;         // skill: video-moments (opt-in per spec)
+export type RefreshStatus = "loaded" | "missing" | "error";
+export type RefreshTrace = {
+  locationSlug: string;
+  date: string;
+  at: string; // ISO timestamp — every run leaves this row, success or failure (invariant #4)
+  gotabStatus: RefreshStatus;
+  courtreserveStatus: RefreshStatus;
+  status: "complete" | "incomplete";
+  error?: string;
 };
 
-/** Ingest a source: connectors → OCR/dedup → PII scrub → chunk → embed → pgvector. */
-export async function ingest(source: Source): Promise<{ sourceId: string; chunks: number }> {
-  // TODO(pilot): wire Supabase pgvector + skills in packages/skills
-  throw new Error("not implemented — see docs/architecture.md#knowledge");
+const LOCAL_DIR = repoPath(".local-storage", "warehouse");
+const TRACE_FILE = join(LOCAL_DIR, "refresh_runs.jsonl");
+
+function supabaseConfigured(): boolean {
+  return !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
 }
 
-/** Query with hybrid search + reranking. Returns text + mandatory citations. */
-export async function query(question: string, opts: QueryOpts): Promise<Answer> {
-  // TODO(pilot): hybrid search (bm25 + vector) → rerank → answer with citations.
-  // If opts.webResearch, call skills/web-research (Anthropic web search or Tavily),
-  // vet sources, and cite them like any other source.
-  throw new Error("not implemented");
+async function supabaseRest(path: string, init: RequestInit = {}): Promise<Response> {
+  const url = process.env.SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_KEY!;
+  const res = await fetch(`${url}/rest/v1/${path}`, {
+    ...init,
+    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...(init.headers ?? {}) },
+  });
+  if (!res.ok) throw new Error(`Supabase REST ${path} failed: ${res.status} ${await res.text()}`);
+  return res;
+}
+
+function localDayPath(locationSlug: string, date: string): string {
+  return join(LOCAL_DIR, locationSlug, `${date}.json`);
+}
+
+/** Upsert a day's normalized rows (one or both sources present). Merges with whatever already loaded that day. */
+export async function writeDay(locationSlug: string, date: string, rows: DailySalesRow[]): Promise<void> {
+  if (supabaseConfigured()) {
+    await supabaseRest("daily_sales", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify(rows.map(r => ({
+        location_slug: r.locationSlug, date: r.date, source: r.source,
+        gross_amount_cents: r.grossAmountCents, breakdown: r.breakdown,
+      }))),
+    });
+    return;
+  }
+  mkdirSync(join(LOCAL_DIR, locationSlug), { recursive: true });
+  const path = localDayPath(locationSlug, date);
+  const existing: DailySalesRow[] = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : [];
+  const bySource = new Map(existing.map(r => [r.source, r]));
+  for (const r of rows) bySource.set(r.source, r);
+  writeFileSync(path, JSON.stringify([...bySource.values()], null, 2));
+}
+
+export async function readDay(locationSlug: string, date: string): Promise<DailySalesRow[]> {
+  if (supabaseConfigured()) {
+    const res = await supabaseRest(`daily_sales?location_slug=eq.${locationSlug}&date=eq.${date}`);
+    const data = (await res.json()) as Array<Record<string, unknown>>;
+    return data.map(d => ({
+      locationSlug: d.location_slug as string, date: d.date as string, source: d.source as "gotab" | "courtreserve",
+      grossAmountCents: d.gross_amount_cents as number, breakdown: d.breakdown as Record<string, number>,
+    }));
+  }
+  const path = localDayPath(locationSlug, date);
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : [];
+}
+
+/** All days loaded for a location in a given month (YYYY-MM), oldest first. */
+export async function readMonth(locationSlug: string, month: string): Promise<Map<string, DailySalesRow[]>> {
+  const result = new Map<string, DailySalesRow[]>();
+  if (supabaseConfigured()) {
+    const res = await supabaseRest(`daily_sales?location_slug=eq.${locationSlug}&date=gte.${month}-01&date=lt.${nextMonth(month)}-01&order=date.asc`);
+    const data = (await res.json()) as Array<Record<string, unknown>>;
+    for (const d of data) {
+      const row: DailySalesRow = {
+        locationSlug: d.location_slug as string, date: d.date as string, source: d.source as "gotab" | "courtreserve",
+        grossAmountCents: d.gross_amount_cents as number, breakdown: d.breakdown as Record<string, number>,
+      };
+      result.set(row.date, [...(result.get(row.date) ?? []), row]);
+    }
+    return result;
+  }
+  const dir = join(LOCAL_DIR, locationSlug);
+  if (!existsSync(dir)) return result;
+  for (const file of readdirSync(dir).sort()) {
+    if (!file.startsWith(month) || !file.endsWith(".json")) continue;
+    const date = file.replace(".json", "");
+    result.set(date, JSON.parse(readFileSync(join(dir, file), "utf8")));
+  }
+  return result;
+}
+
+function nextMonth(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m, 1)); // m is already next month (0-indexed) since input m is 1-indexed
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Every refresh attempt writes one trace row — complete, incomplete, or errored. Never skipped (invariant #4). */
+export async function traceRefresh(trace: RefreshTrace): Promise<void> {
+  if (supabaseConfigured()) {
+    await supabaseRest("refresh_runs", {
+      method: "POST",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({
+        location_slug: trace.locationSlug, date: trace.date, at: trace.at,
+        gotab_status: trace.gotabStatus, courtreserve_status: trace.courtreserveStatus,
+        status: trace.status, error: trace.error ?? null,
+      }),
+    });
+    return;
+  }
+  mkdirSync(LOCAL_DIR, { recursive: true });
+  appendFileSync(TRACE_FILE, JSON.stringify(trace) + "\n");
+}
+
+export async function readTraces(locationSlug?: string): Promise<RefreshTrace[]> {
+  if (supabaseConfigured()) {
+    const filter = locationSlug ? `?location_slug=eq.${locationSlug}&order=at.desc` : "?order=at.desc";
+    const res = await supabaseRest(`refresh_runs${filter}`);
+    const data = (await res.json()) as Array<Record<string, unknown>>;
+    return data.map(d => ({
+      locationSlug: d.location_slug as string, date: d.date as string, at: d.at as string,
+      gotabStatus: d.gotab_status as RefreshStatus, courtreserveStatus: d.courtreserve_status as RefreshStatus,
+      status: d.status as "complete" | "incomplete", error: (d.error as string | null) ?? undefined,
+    }));
+  }
+  if (!existsSync(TRACE_FILE)) return [];
+  const traces = readFileSync(TRACE_FILE, "utf8").trim().split("\n").filter(Boolean).map(l => JSON.parse(l) as RefreshTrace);
+  return locationSlug ? traces.filter(t => t.locationSlug === locationSlug) : traces;
 }

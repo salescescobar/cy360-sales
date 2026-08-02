@@ -1,8 +1,19 @@
 /**
  * E · Loop Agent — background automation with brakes.
- * Trigger (N8N) → gather context → act → verify → repeat → done | escalate.
- * Caps (max iterations, budget) come from config.yaml. Every run leaves an audit trail.
+ * Executes playbooks/daily-sales-refresh.md: ingest both sources for every ACTIVE
+ * location, mark the day complete only when both loaded, trace every attempt (success
+ * or failure), and notify Slack when a day comes back incomplete. Caps + locations come
+ * from config.yaml. Internal Slack alerts are not a `requireCheckpoint()` action — spec
+ * #1 section 6 scopes this product's sensitive actions as "none" (read-only ingestion,
+ * internal notifications only); checkpoints are reserved for spend/delete/customer-facing sends.
  */
+import { readFileSync } from "node:fs";
+import { parse } from "yaml";
+import { ingestGotabDay } from "../skills/gotab-ingest/index";
+import { ingestCourtReserveDay } from "../skills/courtreserve-ingest/index";
+import { writeDay, traceRefresh, type DailySalesRow, type RefreshStatus } from "../knowledge/index";
+import { repoPath } from "../core/paths";
+
 export type Trigger =
   | { kind: "cron"; expr: string }
   | { kind: "webhook"; id: string }
@@ -14,11 +25,126 @@ export type LoopOutcome =
   | { status: "escalated"; reason: string; auditTrailUrl: string }
   | { status: "capped"; cap: "iterations" | "budget"; auditTrailUrl: string };
 
+type LoopsCfg = {
+  locations: Record<string, { active: boolean }>;
+  sources: {
+    gotab: { enabled: boolean; mode: "csv" | "api" };
+    courtreserve: { enabled: boolean; mode: "csv" | "api"; locations?: string[] };
+  };
+};
+
+export function loadCfg(): LoopsCfg {
+  return parse(readFileSync(repoPath("config.yaml"), "utf8")) as LoopsCfg;
+}
+
+export async function notifySlack(text: string): Promise<void> {
+  const hook = process.env.SLACK_WEBHOOK_URL;
+  if (!hook) return;
+  await fetch(hook, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).catch(() => undefined);
+}
+
+export type LocationRefreshResult = {
+  locationSlug: string;
+  date: string;
+  gotabStatus: RefreshStatus;
+  courtreserveStatus: RefreshStatus;
+  status: "complete" | "incomplete";
+  error?: string;
+};
+
+/**
+ * Refresh a single location/date. A source failing or missing never throws — it's
+ * traced and reported so the day is flagged "incomplete", never presented as final
+ * (criteria #3). Returns the same shape whether the caller is the cron loop or a dry run.
+ */
+export async function refreshLocationDay(locationSlug: string, date: string, cfg: LoopsCfg = loadCfg()): Promise<LocationRefreshResult> {
+  let gotabStatus: RefreshStatus = "missing";
+  let courtreserveStatus: RefreshStatus = "missing";
+  let error: string | undefined;
+  const rows: DailySalesRow[] = [];
+
+  try {
+    const day = await ingestGotabDay(locationSlug, date, { mode: cfg.sources.gotab.mode });
+    if (day) {
+      gotabStatus = "loaded";
+      rows.push({ locationSlug, date, source: "gotab", grossAmountCents: day.totalGrossCents, breakdown: day.breakdown });
+    }
+  } catch (e) {
+    gotabStatus = "error";
+    error = `gotab: ${(e as Error).message}`;
+  }
+
+  try {
+    const day = await ingestCourtReserveDay(locationSlug, date, { mode: cfg.sources.courtreserve.mode });
+    if (day) {
+      courtreserveStatus = "loaded";
+      rows.push({ locationSlug, date, source: "courtreserve", grossAmountCents: day.totalGrossCents, breakdown: day.breakdown });
+    }
+  } catch (e) {
+    courtreserveStatus = "error";
+    error = [error, `courtreserve: ${(e as Error).message}`].filter(Boolean).join("; ");
+  }
+
+  if (rows.length) await writeDay(locationSlug, date, rows);
+
+  const status: "complete" | "incomplete" = gotabStatus === "loaded" && courtreserveStatus === "loaded" ? "complete" : "incomplete";
+  await traceRefresh({ locationSlug, date, at: new Date().toISOString(), gotabStatus, courtreserveStatus, status, error });
+
+  if (status === "incomplete") {
+    await notifySlack(
+      `⚠ CY360 Sales refresh incomplete — ${locationSlug} ${date}: gotab=${gotabStatus}, courtreserve=${courtreserveStatus}${error ? ` (${error})` : ""}`,
+    );
+  }
+  return { locationSlug, date, gotabStatus, courtreserveStatus, status, error };
+}
+
+export function activeLocations(cfg: LoopsCfg = loadCfg()): string[] {
+  return Object.entries(cfg.locations).filter(([, l]) => l.active).map(([slug]) => slug);
+}
+
+/** Runs the daily-sales-refresh playbook for one date across every active location. */
+export async function runDailySalesRefresh(date: string, cfg: LoopsCfg = loadCfg()): Promise<LocationRefreshResult[]> {
+  const results: LocationRefreshResult[] = [];
+  for (const slug of activeLocations(cfg)) results.push(await refreshLocationDay(slug, date, cfg));
+  return results;
+}
+
+/** Calendar date (YYYY-MM-DD) in America/New_York for an instant — the refresh always targets ET days. */
+export function etDateString(d: Date, timeZone = "America/New_York"): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+}
+
+export function etYesterday(d: Date = new Date()): string {
+  const [y, m, day] = etDateString(d).split("-").map(Number);
+  const prior = new Date(Date.UTC(y, m - 1, day));
+  prior.setUTCDate(prior.getUTCDate() - 1);
+  return prior.toISOString().slice(0, 10);
+}
+
+export type WatchdogResult = { expectedDate: string; missedLocations: string[] };
+
+/**
+ * Criteria #6: if the 6:00 a.m. ET refresh didn't run, alert within 30 minutes. This is
+ * a separate cron (config.yaml -> refresh.watchdog_cron, e.g. 06:30 ET) checking whether
+ * every active location already has a trace row for the expected date; a missing trace
+ * means the scheduled run never fired at all (distinct from "ran and came back incomplete",
+ * which the refresh itself already reports).
+ */
+export function checkMissedRefresh(now: Date, traces: Array<{ locationSlug: string; date: string }>, cfg: LoopsCfg = loadCfg()): WatchdogResult {
+  const expectedDate = etYesterday(now);
+  const traced = new Set(traces.filter(t => t.date === expectedDate).map(t => t.locationSlug));
+  const missedLocations = activeLocations(cfg).filter(slug => !traced.has(slug));
+  return { expectedDate, missedLocations };
+}
+
 export async function run(trigger: Trigger, playbook: string): Promise<LoopOutcome> {
-  // 1. Load /playbooks/<playbook>.md (versioned = code)
-  // 2. Loop: gather → act → verify (evaluator-optimizer) → repeat
-  // 3. Enforce caps from config.yaml; checkpoints pause for human approval
-  // 4. supervised: true → every run requires approval before acting
-  // 5. Trace everything to Langfuse (tags: component:"E", playbook)
-  throw new Error("not implemented — see docs/architecture.md#loops");
+  if (playbook !== "daily-sales-refresh") throw new Error(`unknown playbook: ${playbook} — see playbooks/daily-sales-refresh.md`);
+  const date = trigger.kind === "cron" ? etYesterday() : etDateString(new Date());
+  const results = await runDailySalesRefresh(date);
+  return {
+    status: "done",
+    iterations: results.length,
+    costUsd: 0, // pure ingestion — no model calls in this playbook
+    auditTrailUrl: ".local-storage/warehouse/refresh_runs.jsonl",
+  };
 }

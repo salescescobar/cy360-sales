@@ -1,9 +1,9 @@
-/** The review queue — the one screen the human uses. Clips appear here after a loop run. */
-export default function ReviewQueue() {
-  return (
-    <main>
-      <h1>Review Queue</h1>
-      <p>No clips yet — the night shift hasn&apos;t run. Start with <code>npm run loop:dry</code>.</p>
-    </main>
-  );
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
+/** Entry point: managers land on their own location's dashboard, or sign in first. */
+export default async function Home() {
+  const jar = await cookies();
+  const location = jar.get("manager_location")?.value;
+  redirect(location ? `/dashboard/${location}` : "/login");
 }

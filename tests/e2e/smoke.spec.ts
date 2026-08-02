@@ -1,6 +1,9 @@
 import { test, expect } from "@playwright/test";
-/** Minimum bar: the product loads and the review queue renders. */
-test("app loads and shows the approval queue", async ({ page }) => {
+/** Minimum bar: the product loads and routes an unauthenticated visitor to sign in.
+ *  The full flow (Orlando sees Orlando, others blocked, day/month toggle) lives in
+ *  tests/e2e/dashboard.spec.ts — this is just the fast up/down check. */
+test("app loads and routes to sign in", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /queue|review/i })).toBeVisible();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "CY360 Sales" })).toBeVisible();
 });
