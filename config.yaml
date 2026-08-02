@@ -1,5 +1,5 @@
 # C · Control Plane — instrumentation, on by default
-project: CHANGE_ME
+project: cy360-sales
 budget:
   monthly_usd: 500
   alert_at_pct: 80
@@ -73,3 +73,16 @@ models:                          # the router decides. Never hardcode a model in
   batch_api_for: [ summarize, format, extract ]   # non-interactive work
   max_cost_per_call_usd: 0.75
   alert_if_escalation_rate_over_pct: 20           # a spec/prompt problem, not a budget one
+
+# ── CY360 Sales — the 5 things that change per product ──
+locations:
+  orlando:     { active: true }
+  nashville:   { active: false }    # activate when credentials arrive — zero code
+  mt_pleasant: { active: false }
+refresh:
+  cron: "0 6 * * *"
+  tz: America/New_York
+  backfill_months: 12
+sources:
+  gotab:        { enabled: true, mode: csv }   # csv now, api when the key arrives
+  courtreserve: { enabled: true, mode: csv, locations: [orlando] }
