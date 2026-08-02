@@ -5,10 +5,25 @@
  * serverless bundle. Vercel has no writable disk for a Chromium profile and doesn't ship
  * the binary; browser-mode ingestion runs in .github/workflows/daily-refresh.yml instead.
  */
+import { readFileSync } from "node:fs";
+import { parse } from "yaml";
 import { GotabDay, extractGotabDayFromText } from "./index";
+import { repoPath } from "../../core/paths";
+
+/**
+ * Our internal location slug ("orlando") is NOT GoTab's tenant slug ("crushyard-orlando").
+ * config.yaml -> locations.<slug>.gotab_slug carries the mapping; without it every URL 404s
+ * and each day comes back as an error — which is exactly what the trace table showed.
+ */
+function gotabTenant(locationSlug: string): string {
+  try {
+    const cfg = parse(readFileSync(repoPath("config.yaml"), "utf8")) as { locations?: Record<string, { gotab_slug?: string }> };
+    return cfg.locations?.[locationSlug]?.gotab_slug ?? locationSlug;
+  } catch { return locationSlug; }
+}
 
 function gotabSalesUrl(locationSlug: string, date: string): string {
-  return `https://manager.gotab.io/${locationSlug}/manager/sales?fiscal_day_start=${date}&fiscal_day_end=${date}&status=PLACED`;
+  return `https://manager.gotab.io/${gotabTenant(locationSlug)}/manager/sales?fiscal_day_start=${date}&fiscal_day_end=${date}&status=PLACED`;
 }
 
 /**
@@ -27,7 +42,7 @@ export async function fetchGotabSalesText(locationSlug: string, date: string): P
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
-    await page.goto(`https://manager.gotab.io/${locationSlug}/manager`, { waitUntil: "domcontentloaded" });
+    await page.goto(`https://manager.gotab.io/${gotabTenant(locationSlug)}/manager`, { waitUntil: "domcontentloaded" });
 
     const emailInput = page.locator('input[type="email"], input[name="username"], input[name="email"]').first();
     if (await emailInput.count() > 0) {

@@ -76,7 +76,7 @@ models:                          # the router decides. Never hardcode a model in
 
 # ── CY360 Sales — the 5 things that change per product ──
 locations:
-  orlando:     { active: true }
+  orlando:     { active: true, gotab_slug: crushyard-orlando }
   nashville:   { active: false }    # activate when credentials arrive — zero code
   mt_pleasant: { active: false }
 refresh:

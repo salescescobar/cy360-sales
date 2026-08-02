@@ -26,7 +26,7 @@ export type LoopOutcome =
   | { status: "capped"; cap: "iterations" | "budget"; auditTrailUrl: string };
 
 export type LoopsCfg = {
-  locations: Record<string, { active: boolean }>;
+  locations: Record<string, { active: boolean; gotab_slug?: string }>;
   refresh?: { backfill_months?: number };
   sources: {
     gotab: { enabled: boolean; mode: "csv" | "api" | "browser" };
