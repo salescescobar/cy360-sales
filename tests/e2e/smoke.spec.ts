@@ -7,3 +7,8 @@ test("app loads and routes to sign in", async ({ page }) => {
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole("heading", { name: "CY360 Sales" })).toBeVisible();
 });
+
+test("deep link to /dashboard with no location redirects to sign in", async ({ page }) => {
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/login$/);
+});

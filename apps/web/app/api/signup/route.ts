@@ -11,32 +11,40 @@ const SignupForm = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const form = await req.formData();
-  const parsed = SignupForm.safeParse({
-    email: form.get("email"),
-    password: form.get("password"),
-    location: form.get("location"),
-  });
-  if (!parsed.success || !activeLocationSlugs().includes(parsed.data.location)) {
-    return NextResponse.redirect(new URL("/signup?error=invalid", req.url));
-  }
-
-  const { email, password, location } = parsed.data;
   try {
-    const manager = await createManager(email, password, location);
-    const res = NextResponse.redirect(new URL(`/dashboard/${location}`, req.url));
-    res.cookies.set(SESSION_COOKIE_NAME, signSession({ managerId: manager.id, locationSlug: location }), {
-      httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30,
-      secure: process.env.NODE_ENV === "production",
+    const form = await req.formData();
+    const parsed = SignupForm.safeParse({
+      email: form.get("email"),
+      password: form.get("password"),
+      location: form.get("location"),
     });
-    return res;
-  } catch (e) {
-    if (e instanceof EmailAlreadyRegisteredError) {
-      return NextResponse.redirect(new URL("/signup?error=email_taken", req.url));
+    if (!parsed.success || !activeLocationSlugs().includes(parsed.data.location)) {
+      return NextResponse.redirect(new URL("/signup?error=invalid", req.url));
     }
-    throw e;
+
+    const { email, password, location } = parsed.data;
+    try {
+      const manager = await createManager(email, password, location);
+      const res = NextResponse.redirect(new URL(`/dashboard/${location}`, req.url));
+      res.cookies.set(SESSION_COOKIE_NAME, signSession({ managerId: manager.id, locationSlug: location }), {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 30,
+        secure: process.env.NODE_ENV === "production",
+      });
+      return res;
+    } catch (e) {
+      if (e instanceof EmailAlreadyRegisteredError) {
+        return NextResponse.redirect(new URL("/signup?error=email_taken", req.url));
+      }
+      throw e;
+    }
+  } catch (e) {
+    // Boundary of the request: whatever broke above (bad form data, a downstream store
+    // erroring), the manager must land back on /signup with a message — never a blank
+    // dead-end page from an unhandled 500.
+    console.error("signup failed", e);
+    return NextResponse.redirect(new URL("/signup?error=server_error", req.url));
   }
 }
