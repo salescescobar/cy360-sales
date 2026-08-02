@@ -154,7 +154,7 @@ async function main() {
   // 8 · budget policy: notify -> pause -> human approval -> resume (consumed)
   const loopDir = repoPath(".loop");
   await t("budget: past-budget run PAUSES awaiting approval (exit 3)", () => {
-    rmSync(loopDir, { recursive: true, force: true });
+    rmSync(`${loopDir}/costs.jsonl`, { force: true });
     mkdirSync(loopDir, { recursive: true });
     writeFileSync(join(loopDir, "costs.jsonl"), JSON.stringify({ task: "code", model: "x", rung: "top", in: 1, out: 1, usd: 999 }) + "\n");
     const r = spawnSync("npx", ["tsx", "scripts/autonomous-loop.ts", "--simulate"], { encoding: "utf8" });
@@ -165,7 +165,7 @@ async function main() {
     const r = spawnSync("npx", ["tsx", "scripts/autonomous-loop.ts", "--simulate"], { encoding: "utf8" });
     assert(r.status === 0 && r.stdout.includes("GATE PASSED"), `status ${r.status}`);
     assert(!existsSync(join(loopDir, "budget-approved")), "approval not consumed");
-    rmSync(loopDir, { recursive: true, force: true });
+    rmSync(`${loopDir}/costs.jsonl`, { force: true });
   });
 
   rmSync(repoPath(".local-storage", "warehouse", testLocation), { recursive: true, force: true });
