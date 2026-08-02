@@ -88,7 +88,11 @@ function runClaude(role: string, iter: number, cliArgs: string[]): Promise<{ cod
   return new Promise(resolve => {
     const child = spawn("claude", cliArgs, { env: claudeEnv(), stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
-    const tee = (buf: Buffer) => { const t = buf.toString(); out += t; appendFileSync(logPath, t); process.stdout.write(t); };
+    const tee = (buf: Buffer) => {
+      const t = buf.toString(); out += t; process.stdout.write(t);
+      try { appendFileSync(logPath, t); }
+      catch { try { mkdirSync(".loop", { recursive: true }); appendFileSync(logPath, t); } catch { /* logging must never crash a build */ } }
+    };
     child.stdout.on("data", tee);
     child.stderr.on("data", tee);
     child.on("error", err => { clearInterval(beat); resolve({ code: 127, out: out + String(err) }); });

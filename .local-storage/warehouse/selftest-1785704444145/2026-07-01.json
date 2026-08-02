@@ -1,0 +1,11 @@
+[
+  {
+    "locationSlug": "selftest-1785704444145",
+    "date": "2026-07-01",
+    "source": "gotab",
+    "grossAmountCents": 1234,
+    "breakdown": {
+      "food": 1234
+    }
+  }
+]
