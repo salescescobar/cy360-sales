@@ -17,6 +17,7 @@ export async function renderClip(spec: ClipSpec): Promise<{ clipUrl: string; dur
   if (!existsSync(src)) throw new Error(`source video not found: ${src}`);
   const out = join(mkdtempSync(join(tmpdir(), "clip-")), "clip.mp4");
 
+  let captionBurned = !!spec.caption;
   const vf: string[] = ["scale=w=1080:h=1920:force_original_aspect_ratio=increase", "crop=1080:1920"];
   if (spec.caption) vf.push(`drawtext=text='${esc(spec.caption)}':fontcolor=white:fontsize=54:box=1:boxcolor=black@0.55:boxborderw=18:x=(w-text_w)/2:y=h-320`);
 
@@ -29,11 +30,22 @@ export async function renderClip(spec: ClipSpec): Promise<{ clipUrl: string; dur
     args.push("-vf", vf.join(","));
   }
   args.push("-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-an", out);
-  execFileSync("ffmpeg", args, { stdio: "ignore" });
+  try {
+    execFileSync("ffmpeg", args, { stdio: "ignore" });
+  } catch (e) {
+    // Portability: some ffmpeg builds ship without drawtext/freetype (common on macOS).
+    // A missing caption burn must never fail the render — drop the overlay and continue.
+    if (!spec.caption) throw e;
+    const plain = ["-y", "-ss", String(spec.startSec), "-to", String(spec.endSec), "-i", src,
+      "-vf", "scale=w=1080:h=1920:force_original_aspect_ratio=increase,crop=1080:1920",
+      "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-an", out];
+    execFileSync("ffmpeg", plain, { stdio: "ignore" });
+    captionBurned = false;
+  }
 
   const dur = parseFloat(execFileSync("ffprobe", ["-v","error","-show_entries","format=duration","-of","csv=p=0", out]).toString()) || 0;
   const saved = await saveClip(out);
-  return { clipUrl: saved.url, durationSec: +dur.toFixed(2), logoApplied: !!logo, backend: saved.backend };
+  return { clipUrl: saved.url, durationSec: +dur.toFixed(2), logoApplied: !!logo, captionBurned, backend: saved.backend };
 }
 
 /** Caption in brand voice: model via router when a key exists; deterministic fallback otherwise. */
