@@ -11,6 +11,8 @@
 import { readFileSync, existsSync, mkdirSync, appendFileSync, renameSync } from "node:fs";
 import { execFileSync, execSync } from "node:child_process";
 import { parse } from "yaml";
+import { loadLocalEnv } from "../packages/core/env";
+loadLocalEnv();
 
 type Check = { id: string; blocker?: boolean; desc: string };
 type Rubric = { threshold: number; core: Check[]; holdout_pool: Check[] };

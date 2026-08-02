@@ -8,6 +8,8 @@ import { parse } from "yaml";
 import { findMoments } from "../packages/skills/video-moments/index";
 import { renderClip, writeCaption } from "../packages/skills/video-edit/index";
 import { check } from "../packages/skills/brand-guardrails/index";
+import { loadLocalEnv } from "../packages/core/env";
+loadLocalEnv();
 
 const dryRun = process.argv.includes("--dry-run");
 const cfg = parse(readFileSync("config.yaml", "utf8")) as {

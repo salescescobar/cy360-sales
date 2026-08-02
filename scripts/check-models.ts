@@ -8,6 +8,8 @@
  */
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
+import { loadLocalEnv } from "../packages/core/env";
+loadLocalEnv();
 
 const cfg = (parse(readFileSync("config.yaml", "utf8")) as { models: Record<string, unknown> }).models as {
   cheap: string; mid: string; top: string; frontier?: string;

@@ -29,6 +29,9 @@ function cfg(): ModelsCfg {
 /** USD per million tokens (input, output). ESTIMATES — verify against the live price list. */
 const PRICES: Record<string, [number, number]> = {
   "claude-haiku-4-5": [1, 5],
+  "claude-haiku-4-5-20251001": [1, 5],
+  "claude-sonnet-5": [3, 15],   // TODO verify on anthropic.com/pricing
+  "claude-opus-5": [15, 75],    // TODO verify on anthropic.com/pricing
   "claude-sonnet-4-6": [3, 15],
   "claude-opus-4-8": [15, 75],
   "claude-fable-5": [15, 75],   // TODO verify — frontier pricing not confirmed; estimate only

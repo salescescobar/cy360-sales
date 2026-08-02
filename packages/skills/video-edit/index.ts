@@ -12,7 +12,7 @@ export type ClipSpec = { videoUrl: string; startSec: number; endSec: number; log
 
 const esc = (t: string) => t.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/:/g, "\\:").replace(/%/g, "\\%");
 
-export async function renderClip(spec: ClipSpec): Promise<{ clipUrl: string; durationSec: number; logoApplied: boolean; backend: string }> {
+export async function renderClip(spec: ClipSpec): Promise<{ clipUrl: string; durationSec: number; logoApplied: boolean; captionBurned: boolean; backend: string }> {
   const src = spec.videoUrl.replace("file://", "");
   if (!existsSync(src)) throw new Error(`source video not found: ${src}`);
   const out = join(mkdtempSync(join(tmpdir(), "clip-")), "clip.mp4");

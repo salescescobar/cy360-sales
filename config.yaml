@@ -55,10 +55,10 @@ models:                          # the router decides. Never hardcode a model in
   # under YOUR key, verify pricing on anthropic.com/pricing, then edit ONE line here.
   # News posts and third-party catalogs don't count; only /v1/models does.
   routing: cheapest_capable      # start cheap, escalate only on failed verification
-  cheap:   claude-haiku-4-5
-  mid:     claude-sonnet-4-6
-  top:     claude-opus-4-8
-  frontier: claude-fable-5     # Mythos-class, above Opus — architect ceiling only
+  cheap:    claude-haiku-4-5-20251001
+  mid:      claude-sonnet-5
+  top:      claude-opus-5
+  frontier: claude-fable-5     # architect ceiling only
   classes:                       # task class -> starting rung : ceiling
     classify:  { start: cheap, max: cheap }
     extract:   { start: cheap, max: mid }
