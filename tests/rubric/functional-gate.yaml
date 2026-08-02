@@ -1,23 +1,24 @@
-# The judge's rubric. LIVES WITH THE JUDGE ONLY — the builder never reads this file.
-# 10 core checks + a holdout pool; 3 holdouts rotate per iteration (anti-overfit).
+# Judge rubric DERIVED FROM docs/spec.md — the spec is the exam.
+# The builder never reads this file. 3 holdouts rotate per iteration.
 threshold: 90
 core:
-  - { id: loads_fast,      blocker: true,  desc: "App loads < 3s with no console errors" }
-  - { id: main_flow,       blocker: true,  desc: "Spec's main flow completes end to end unaided" }
-  - { id: no_dead_ends,    blocker: true,  desc: "No dead screens, internal 404s, or inert buttons" }
-  - { id: clear_errors,    blocker: true,  desc: "User errors show clear messages, never stack traces" }
-  - { id: auth,            blocker: true,  desc: "Signup, login, logout; session persists" }
-  - { id: persistence,     blocker: true,  desc: "Create → reload → still there" }
-  - { id: responsive,      blocker: false, desc: "Usable at 390px and desktop" }
-  - { id: ai_evals,        blocker: true,  desc: "RAGAS/Promptfoo above threshold (when AI applies)" }
-  - { id: hostile_inputs,  blocker: true,  desc: "XSS strings, empty fields, 10k-char inputs don't break it" }
-  - { id: deducible,       blocker: false, desc: "A tester without the spec can deduce and use it" }
-  - { id: security_gate,   blocker: true,  desc: "Secret scan + deps audit + destructive-op linter green" }
-  - { id: cost_gate,       blocker: true,  desc: "Run cost within budget_usd" }
+  - { id: loads_fast,        blocker: true,  desc: "Dashboard loads under 3s with no console errors" }
+  - { id: manager_signin,    blocker: true,  desc: "A manager signs in with the seeded credentials and lands on their own location dashboard. Do NOT require a public signup flow — accounts are provisioned, not self-served" }
+  - { id: location_isolation, blocker: true, desc: "SHALL NEVER #1: signed in for Orlando, any attempt to view another location's data is refused (URL tampering included)" }
+  - { id: daily_view,        blocker: true,  desc: "Day view shows that date's sales totals and breakdown for a date that has data" }
+  - { id: monthly_view,      blocker: true,  desc: "Month view shows monthly totals plus a prior-period comparative" }
+  - { id: incomplete_day,    blocker: true,  desc: "A day missing a source is labelled incomplete and excluded from comparatives — partial totals are never shown as final" }
+  - { id: view_toggle,       blocker: true,  desc: "Switching day/month and changing the date works, and survives a reload" }
+  - { id: no_dead_ends,      blocker: true,  desc: "No blank screens, raw 404/500 pages, or inert buttons anywhere reachable" }
+  - { id: clear_errors,      blocker: true,  desc: "Errors and unauthenticated access show accurate, human messages — never a stack trace or a misleading claim" }
+  - { id: hostile_inputs,    blocker: true,  desc: "Malformed dates, path-traversal strings and 10k-char inputs return a clean error, never a crash" }
+  - { id: security_gate,     blocker: true,  desc: "Secret scan, dependency audit and destructive-op linter all green" }
+  - { id: responsive,        blocker: false, desc: "Usable at 390px and on desktop" }
+  - { id: deducible,         blocker: false, desc: "A location manager who never read the spec can answer 'how did we do yesterday?' unaided" }
 holdout_pool:
-  - { id: h_refresh_mid_flow, desc: "Refreshing mid-flow doesn't lose state or crash" }
-  - { id: h_double_submit,    desc: "Double-clicking submit doesn't duplicate the action" }
-  - { id: h_slow_network,     desc: "Throttled network shows loading states, not blank screens" }
-  - { id: h_deep_link,        desc: "A deep link to an inner page renders (no white screen)" }
-  - { id: h_empty_state,      desc: "Zero-data states explain themselves" }
-  - { id: h_back_button,      desc: "Browser back behaves sanely after actions" }
+  - { id: h_refresh_mid_flow, desc: "Reloading mid-flow preserves the selected view and date" }
+  - { id: h_deep_link,        desc: "A deep link to an inner page renders or redirects sensibly — never a raw 404" }
+  - { id: h_empty_state,      desc: "A date with no data explains itself instead of looking broken" }
+  - { id: h_back_button,      desc: "Browser back behaves sanely after switching views" }
+  - { id: h_slow_network,     desc: "Throttled network shows loading states, not blank panels" }
+  - { id: h_stale_session,    desc: "An expired or cleared session sends the user to sign in with an accurate message" }
