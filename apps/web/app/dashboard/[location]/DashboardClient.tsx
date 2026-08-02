@@ -38,14 +38,16 @@ export default function DashboardClient({ location }: { location: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false; // ignore a slower, now-stale request that resolves after a newer one
     setLoading(true);
     setError(null);
     const when = period === "day" ? date : month;
     fetch(`/api/metrics?location=${encodeURIComponent(location)}&period=${period}&date=${encodeURIComponent(when)}`)
       .then(async r => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`); return r.json(); })
-      .then(data => { if (period === "day") setDaily(data); else setMonthly(data); })
-      .catch(e => setError(String(e)))
-      .finally(() => setLoading(false));
+      .then(data => { if (cancelled) return; if (period === "day") setDaily(data); else setMonthly(data); })
+      .catch(e => { if (!cancelled) setError(String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [location, period, date, month]);
 
   return (

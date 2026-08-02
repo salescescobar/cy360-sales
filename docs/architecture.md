@@ -1,16 +1,30 @@
-# Architecture — Framework v2.1 (this diagram IS the architecture)
+# Architecture — CY360 Sales (Framework v2.1 template, product per Spec #1)
 
-  user ──► apps/web ──► B core.run() ──► A knowledge.query() ──► Supabase pgvector
-                              │                    └─► skills/web-research (opt-in)
-                              ├─► guardrails · permissions · checkpoints
-  N8N triggers ──► E loop.run() ──► (uses B and A) ──► outcome + audit trail
-  ────────────────────────────────────────────────────────────────────────
-  C control plane: config.yaml + Langfuse traces/dashboards + evals gate + E2E (CI)
+  manager ──► apps/web (login → /dashboard/[location]) ──► /api/metrics
+                                                                 │
+                                                                 ▼
+              A knowledge.{writeDay,readDay,readMonth,traceRefresh} ──► Supabase (RLS)
+                                                                 │        or local JSON fallback
+                                                                 ▼
+  Vercel Cron (0 6 * * * ET) ──► E loop.run() ──► playbooks/daily-sales-refresh.md
+                                      │
+                                      ├─► skills/gotab-ingest (F&B, CSV/API)
+                                      └─► skills/courtreserve-ingest (courts, CSV/API)
+                                      └─► skills/metrics (daily + monthly aggregates)
+  Vercel Cron (0630 ET) ──► scripts/watchdog.ts ──► Slack #ops if the 6:00 run never fired
+  ──────────────────────────────────────────────────────────────────────────
+  C control plane: config.yaml (locations, sources, refresh cron/backfill) + Langfuse + E2E (CI)
   D dev agent: .github/workflows/ci.yml (Claude review + standards)
-  ────────────────────────────────────────────────────────────────────────
-  skills (packages/skills): web-research · video-moments · ocr · pii · chunk-embed
-                            hybrid-search | video-edit · brand-guardrails · publish
-                            | evaluator-optimizer · n8n-triggers
-  Paid skills are declared in config.yaml so their cost is visible on the dashboard.
+  ──────────────────────────────────────────────────────────────────────────
+  skills (packages/skills): gotab-ingest · courtreserve-ingest · metrics · web-research
+  This product has no user-facing model calls (pure ingestion + aggregation + dashboard) —
+  packages/core/router.ts and checkpoint.ts remain wired for future features that need them.
+
+Invariants enforced in code, not just docs:
+  #1 location isolation  → supabase/migrations/0001_init.sql RLS + apps/web cookie gate
+  #2 no creds outside env → gotab-ingest/courtreserve-ingest read GOTAB_API_KEY/COURTRESERVE_API_KEY
+                             from process.env only, never logged
+  #3 read-only vs sources → ingest skills only ever GET/read CSV, never write back
+  #4 every run traced     → knowledge.traceRefresh() called for every location/date, pass or fail
 
 Anchors: #knowledge #core #loops — extend sections as the pilot implements them.
