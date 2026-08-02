@@ -1,0 +1,50 @@
+name: Daily sales refresh (GoTab browser mode)
+
+on:
+  schedule:
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Backfill start date (YYYY-MM-DD). Leave empty for yesterday only."
+        required: false
+      to:
+        description: "Backfill end date (YYYY-MM-DD)."
+        required: false
+
+concurrency:
+  group: daily-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: "E · daily-sales-refresh"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Refresh sales
+        env:
+          GOTAB_USER: ${{ secrets.GOTAB_USER }}
+          GOTAB_PASS: ${{ secrets.GOTAB_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -n "${{ inputs.from }}" ]; then
+            npx tsx scripts/gotab-refresh.ts --from=${{ inputs.from }} --to=${{ inputs.to || inputs.from }}
+          else
+            npx tsx scripts/gotab-refresh.ts
+          fi
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST -H 'Content-Type: application/json' \
+            -d '{"text":"🛑 CY360 daily sales refresh FAILED — see GitHub Actions run '"$GITHUB_RUN_ID"'"}' \
+            "$SLACK_WEBHOOK_URL" || true
