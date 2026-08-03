@@ -157,8 +157,12 @@ export const CourtReserveDetailedRow = z.object({
   MembershipName: z.string().nullish(),
   Start: z.string().nullish(),
   End: z.string().nullish(),
-  CourtLabels: z.string().nullish(),
-  CourtIds: z.string().nullish(),
+  // Verified live 2026-08-02: the API returns these as arrays (CourtIds of numbers), not
+  // the scalar strings the documented field names suggest — a schema-only mismatch (a bad
+  // guess at the shape, not a live source change), so no re-verification of the
+  // endpoint/auth/mapping was needed.
+  CourtLabels: z.union([z.string(), z.array(z.union([z.string(), z.number()]))]).nullish(),
+  CourtIds: z.union([z.string(), z.array(z.union([z.string(), z.number()]))]).nullish(),
   ReservationId: z.union([z.string(), z.number()]).nullish(),
   InstructorNames: z.string().nullish(),
   PaymentType: z.string().nullish(),
@@ -271,6 +275,11 @@ export function mapDetailedRowToTransaction(row: CourtReserveDetailedRow, locati
 /** court_reservations, deduped by ReservationId — a reservation can carry multiple fee
  *  line items (multiple DetailedRows), but is one row here. Rows with no ReservationId
  *  (non-court fees) are simply not reservations and are skipped. */
+function joinIfArray(value: string | (string | number)[] | null | undefined): string | null {
+  if (value == null) return null;
+  return Array.isArray(value) ? value.join(", ") : value;
+}
+
 export function mapDetailedRowsToReservations(rows: CourtReserveDetailedRow[], locationSlug: string): CourtReservationRow[] {
   const byId = new Map<string, CourtReservationRow>();
   for (const row of rows) {
@@ -280,8 +289,8 @@ export function mapDetailedRowsToReservations(rows: CourtReserveDetailedRow[], l
     byId.set(reservationId, {
       locationSlug,
       reservationId,
-      courtLabels: row.CourtLabels ?? null,
-      courtIds: row.CourtIds ?? null,
+      courtLabels: joinIfArray(row.CourtLabels),
+      courtIds: joinIfArray(row.CourtIds),
       startAt: row.Start ?? null,
       endAt: row.End ?? null,
       businessDate: row.PaidDate.slice(0, 10),

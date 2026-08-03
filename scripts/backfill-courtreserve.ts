@@ -1,11 +1,11 @@
 /**
  * `npm run backfill:courtreserve -- --from=2025-01-01 --to=<today>` (spec #1 v2, section 10).
  * Pages the CourtReserve live API month by month, mapping each DetailedRow into
- * sales_transactions/court_reservations/payment_type_totals. Idempotent — every write
- * upserts on its table's natural key, so re-running the same range replaces rows rather
- * than duplicating them. Every month processed leaves one `imports` audit row (invariant #4
- * extended to the API path: no ingestion without a trace), even when that month had zero
- * transactions.
+ * sales_transactions/court_reservations/payment_type_totals via replaceCourtReserveDetail
+ * (packages/knowledge/courtreserve.ts) — idempotent by construction (delete-then-insert per
+ * location/range), so re-running the same --from/--to replaces rows rather than duplicating
+ * them. Every month processed leaves one `imports` audit row (invariant #4 extended to the
+ * API path: no ingestion without a trace), even when that month had zero transactions.
  */
 import { loadLocalEnv } from "../packages/core/env";
 loadLocalEnv();
@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { repoPath } from "../packages/core/paths";
 import { ingestCourtReserveDetail } from "../packages/skills/courtreserve-ingest/index";
-import { writeSalesTransactions, writeCourtReservations, writePaymentTypeTotals } from "../packages/knowledge/courtreserve-detail";
+import { replaceCourtReserveDetail } from "../packages/knowledge/courtreserve";
 import { recordImportUpload } from "../packages/knowledge/index";
 
 type Cfg = { sources: { courtreserve: { locations?: string[] } } };
@@ -63,9 +63,9 @@ async function main() {
       const monthEnd = month === to.slice(0, 7) ? to : lastDayOfMonth(month);
 
       const { transactions, reservations, paymentTypeTotals } = await ingestCourtReserveDetail(locationSlug, monthStart, monthEnd);
-      await writeSalesTransactions(transactions);
-      await writeCourtReservations(reservations);
-      await writePaymentTypeTotals(paymentTypeTotals);
+      // Idempotent: replaces whatever was previously loaded for this location/range rather
+      // than appending, so re-running the same --from/--to never duplicates rows.
+      await replaceCourtReserveDetail(locationSlug, monthStart, monthEnd, { transactions, reservations, paymentTypeTotals });
 
       // One imports audit row per month processed, even when a month has zero transactions
       // (invariant #4's "no ingestion without a trace", extended to the API path — there's
