@@ -3,7 +3,8 @@ import { cookies } from "next/headers";
 import { parse } from "yaml";
 import { readFileSync } from "node:fs";
 import { buildPeriodInput, etDateString } from "../../../../../packages/loops/index";
-import { computeGrowthReport, buildDrilldown, buildHourlyCurve, priorMonthOf, sameMonthLastYearOf } from "../../../../../packages/skills/growth-report/index";
+import { computeGrowthReport, buildDrilldown, buildHourlyCurve, priorMonthOf, sameMonthLastYearOf, type CurrentPeriodPhase } from "../../../../../packages/skills/growth-report/index";
+import { readDay } from "../../../../../packages/knowledge/index";
 import { listBusinessLineRules } from "../../../../../packages/knowledge/revenue";
 import { repoPath } from "../../../../../packages/core/paths";
 import { activeLocationSlugs } from "../../lib/locations";
@@ -48,11 +49,35 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: `invalid ${period === "day" ? "date" : "month"} — expected ${period === "day" ? "YYYY-MM-DD" : "YYYY-MM"}` }, { status: 400 });
   }
 
-  // Day view (criterion #7) is the same three-column structure sliced to a single day: the
-  // "elapsed days" for a day view is always 1, and every period is that day-of-month only.
+  // Day view (criterion #7) is the same three-column structure sliced to ONE calendar day
+  // (never accumulated from day 1 of the month — that would silently turn "day view for the
+  // 15th" into "month-to-date through the 15th"); elapsedDays becomes the exact day-of-month
+  // every period is matched against instead of a cumulative cutoff (growth-report's singleDay
+  // mode).
   const month = period === "day" ? value.slice(0, 7) : value;
-  const elapsedDays = period === "day" ? Number(value.slice(8, 10)) : (month === today.slice(0, 7) ? Number(today.slice(8, 10)) : undefined);
-  const recognitionThroughDate = period === "day" ? value : (elapsedDays != null ? `${month}-${String(elapsedDays).padStart(2, "0")}` : `${month}-31`);
+  const daysInTargetMonth = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
+
+  // A period the calendar hasn't reached yet has 0 elapsed days — comparing it against real
+  // history would fabricate a decline out of pure elapsed time (criterion #6). A period fully
+  // in the past gets a normal full comparison. Only the CURRENT calendar month/day is partial.
+  let currentPhase: CurrentPeriodPhase;
+  let effectiveElapsedDays: number;
+  if (period === "day") {
+    if (value > today) { currentPhase = "future"; }
+    else if (value === today) { currentPhase = "in_progress"; }
+    else { currentPhase = "complete"; }
+    effectiveElapsedDays = Number(value.slice(8, 10));
+  } else if (month > today.slice(0, 7)) {
+    currentPhase = "future";
+    effectiveElapsedDays = 0;
+  } else if (month === today.slice(0, 7)) {
+    currentPhase = "in_progress";
+    effectiveElapsedDays = Number(today.slice(8, 10));
+  } else {
+    currentPhase = "complete";
+    effectiveElapsedDays = daysInTargetMonth;
+  }
+  const recognitionThroughDate = period === "day" ? value : `${month}-${String(effectiveElapsedDays || 1).padStart(2, "0")}`;
 
   try {
     const [current, priorMonth, lastYear, rules] = await Promise.all([
@@ -62,22 +87,26 @@ export async function GET(req: NextRequest) {
       listBusinessLineRules(),
     ]);
 
-    // A full past month gets a normal full-month comparison (criterion #5's "same elapsed
-    // days" only matters while the current month is still in progress) — use whichever
-    // month is shorter as the elapsed-days ceiling so Feb never overruns.
-    const daysInTargetMonth = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
-    const effectiveElapsedDays = elapsedDays ?? daysInTargetMonth;
-
+    const singleDay = period === "day";
     const report = computeGrowthReport({
       locationSlug: location, elapsedDays: effectiveElapsedDays, current, priorMonth, lastYear, rules,
-      thresholds: loadThresholds(), recognitionThroughDate,
+      thresholds: loadThresholds(), recognitionThroughDate, singleDay, currentPhase,
     });
-    const drilldown = buildDrilldown(current, effectiveElapsedDays, rules);
+    const drilldown = buildDrilldown(current, effectiveElapsedDays, rules, singleDay);
     // Hourly curve (criterion #7) only makes sense for a single day — CourtReserve only,
     // GoTab's daily-summary ingestion has no time-of-day field (spec section 3).
     const hourly = period === "day" ? { courtreserve: buildHourlyCurve(current.courtRows, value), gotabAvailable: false } : null;
+    // Criterion #3/reads_supabase: a day view needs to isolate ONE source's own total (e.g.
+    // "GoTab gross for this specific day") without it being merged into the combined figure —
+    // daily_sales already carries gross_amount_cents per source for exactly this.
+    const bySource = period === "day" ? await (async () => {
+      const rows = await readDay(location, value);
+      const gotab = rows.find(r => r.source === "gotab");
+      const courtreserve = rows.find(r => r.source === "courtreserve");
+      return { gotabGrossCents: gotab?.grossAmountCents ?? null, courtreserveGrossCents: courtreserve?.grossAmountCents ?? null };
+    })() : null;
 
-    return NextResponse.json({ report, drilldown, hourly });
+    return NextResponse.json({ report, drilldown, hourly, bySource });
   } catch (e) {
     console.error("growth-report failed", e);
     return NextResponse.json({ error: "couldn't load the growth report — try again shortly" }, { status: 500 });

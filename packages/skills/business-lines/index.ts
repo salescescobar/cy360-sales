@@ -62,12 +62,27 @@ export const DEFAULT_BUSINESS_LINE_RULES: BusinessLineRule[] = [
   { source: "gotab", matchGroup: "merchandise", matchItem: null, businessLine: "swag", priority: 10 },
   { source: "gotab", matchGroup: "arcade", matchItem: null, businessLine: "arcade", priority: 10 },
   { source: "gotab", matchGroup: "sponsorship", matchItem: null, businessLine: "sponsorships", priority: 10 },
+
+  // GoTab's real daily-summary ingestion (the browser-mode backfill that loaded the 569
+  // production days — packages/knowledge/index.ts's normalizeBreakdown) has no per-category
+  // split at all, just one financial-summary total collapsed into a single "uncategorized"
+  // bucket. Leaving that bucket permanently Unmapped would put 100% of GoTab's recognized
+  // revenue in Unmapped forever, which defeats the report (criterion #1) even though nothing
+  // is actually ambiguous about it: GoTab is Crush Yard's F&B point of sale first, with
+  // swag/arcade a minor share only visible when a category-level CSV export IS uploaded (the
+  // rules above still take priority for that shape). Lower priority than every specific rule
+  // above so a real category breakdown always wins over this catch-all; still admin-editable
+  // via /admin/business-lines like any other rule (criterion #4).
+  { source: "gotab", matchGroup: "uncategorized", matchItem: null, businessLine: "food_beverage", priority: 50 },
 ];
 
-/** ILIKE-style match: `%foo%` = substring, otherwise exact — both case-insensitive. */
+/** ILIKE-style match: `%foo%` = substring, otherwise exact — both case-insensitive. Trims
+ *  surrounding whitespace on both sides so a stray leading/trailing space in a live source
+ *  field (seen in real CourtReserve item names, e.g. trailing spaces on event titles) never
+ *  silently defeats an otherwise-correct exact match. */
 function ilikeMatches(pattern: string, value: string): boolean {
-  const p = pattern.toLowerCase();
-  const v = value.toLowerCase();
+  const p = pattern.trim().toLowerCase();
+  const v = value.trim().toLowerCase();
   if (p.startsWith("%") && p.endsWith("%") && p.length >= 2) return v.includes(p.slice(1, -1));
   if (p.startsWith("%")) return v.endsWith(p.slice(1));
   if (p.endsWith("%")) return v.startsWith(p.slice(0, -1));

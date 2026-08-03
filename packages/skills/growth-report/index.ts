@@ -24,6 +24,8 @@ export type PeriodInput = {
   courtreserveOk: boolean; // false when the live API call for this period failed outright
 };
 
+export type CurrentPeriodPhase = "complete" | "in_progress" | "future";
+
 export type GrowthReportInput = {
   locationSlug: string;
   elapsedDays: number; // days 1..N included in EVERY period (criterion #2's "same elapsed days")
@@ -33,6 +35,15 @@ export type GrowthReportInput = {
   rules: BusinessLineRule[];
   thresholds: { green_pct: number; red_pct: number };
   recognitionThroughDate: string; // shown on screen as "Recognized revenue through <date>" (spec section 2)
+  // Day view (period=day) isolates ONE calendar day rather than accumulating day 1..N of the
+  // month — elapsedDays is then the exact day-of-month to match, not a cumulative cutoff.
+  singleDay?: boolean;
+  // Caller (the API route) knows "today"; this module doesn't. "future" means the requested
+  // period hasn't started at all (0 elapsed days) — comparing it against real history would
+  // fabricate a -100% out of pure elapsed-time, not an actual decline (criterion #6), so pct
+  // comparisons and alerts are suppressed entirely and `missing` says why. "in_progress" still
+  // compares normally (that's the whole point of "same elapsed days"); it only adds a label.
+  currentPhase?: CurrentPeriodPhase;
 };
 
 const dayOfMonth = (date: string): number => Number(date.slice(8, 10));
@@ -67,8 +78,11 @@ export type PeriodTotals = {
 /** Sums one period's recognized rows + GoTab breakdowns into per-business-line cents,
  *  honoring the elapsed-days slice and excluding incomplete/open GoTab days from the total
  *  entirely (criterion #6) while still naming what's missing. */
-function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: BusinessLineRule[]): PeriodTotals {
+function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: BusinessLineRule[], singleDay = false): PeriodTotals {
   const effectiveDays = Math.min(elapsedDays, daysInMonth(period.label));
+  // Month view accumulates day 1..effectiveDays (month-to-date); day view isolates exactly
+  // that one day-of-month across every period being compared, never the days before it.
+  const excluded = (date: string) => singleDay ? dayOfMonth(date) !== effectiveDays : dayOfMonth(date) > effectiveDays;
   const byLine = new Map<string, number>();
   let discountCents = 0;
   // A negative-amount line item (a discount/refund) is pulled into its own bucket at the
@@ -81,7 +95,7 @@ function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: Busine
   };
 
   for (const row of period.courtRows) {
-    if (dayOfMonth(row.businessDate) > effectiveDays) continue;
+    if (excluded(row.businessDate)) continue;
     const line = resolveBusinessLine(rules, "courtreserve", row.groupName, row.itemName);
     bump(line, row.amountCents);
   }
@@ -91,7 +105,7 @@ function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: Busine
 
   const missingGotabDates: string[] = [];
   for (const day of period.gotabDays) {
-    if (dayOfMonth(day.date) > effectiveDays) continue;
+    if (excluded(day.date)) continue;
     if (day.status !== "complete") { missingGotabDates.push(day.date); continue; }
     for (const [category, cents] of Object.entries(day.breakdown)) {
       const line = resolveBusinessLine(rules, "gotab", category, category);
@@ -182,8 +196,9 @@ export type DrilldownGroup = { group: string; amountCents: number; items: Drilld
  * total, so a GoTab "transaction" here IS that day's category total — the finest grain the
  * source actually gives us, never a fabricated split.
  */
-export function buildDrilldown(period: PeriodInput, elapsedDays: number, rules: BusinessLineRule[]): Record<string, DrilldownGroup[]> {
+export function buildDrilldown(period: PeriodInput, elapsedDays: number, rules: BusinessLineRule[], singleDay = false): Record<string, DrilldownGroup[]> {
   const effectiveDays = Math.min(elapsedDays, daysInMonth(period.label));
+  const excluded = (date: string) => singleDay ? dayOfMonth(date) !== effectiveDays : dayOfMonth(date) > effectiveDays;
   const byLineGroupItem = new Map<string, Map<string, Map<string, DrilldownTransaction[]>>>();
 
   const record = (line: string, group: string, item: string, tx: DrilldownTransaction) => {
@@ -196,12 +211,12 @@ export function buildDrilldown(period: PeriodInput, elapsedDays: number, rules: 
   };
 
   for (const row of period.courtRows) {
-    if (dayOfMonth(row.businessDate) > effectiveDays) continue;
+    if (excluded(row.businessDate)) continue;
     const line = resolveBusinessLine(rules, "courtreserve", row.groupName, row.itemName);
     record(line, row.groupName, row.itemName, { date: row.businessDate, amountCents: row.amountCents, source: "courtreserve", transactionType: row.transactionType, paymentType: row.paymentType });
   }
   for (const day of period.gotabDays) {
-    if (dayOfMonth(day.date) > effectiveDays || day.status !== "complete") continue;
+    if (excluded(day.date) || day.status !== "complete") continue;
     for (const [category, cents] of Object.entries(day.breakdown)) {
       const line = resolveBusinessLine(rules, "gotab", category, category);
       record(line, category, category, { date: day.date, amountCents: cents, source: "gotab" });
@@ -221,9 +236,11 @@ export function buildDrilldown(period: PeriodInput, elapsedDays: number, rules: 
 }
 
 export function computeGrowthReport(input: GrowthReportInput): GrowthReport {
-  const current = summarizePeriod(input.current, input.elapsedDays, input.rules);
-  const priorMonth = summarizePeriod(input.priorMonth, input.elapsedDays, input.rules);
-  const lastYear = summarizePeriod(input.lastYear, input.elapsedDays, input.rules);
+  const singleDay = input.singleDay ?? false;
+  const current = summarizePeriod(input.current, input.elapsedDays, input.rules, singleDay);
+  const priorMonth = summarizePeriod(input.priorMonth, input.elapsedDays, input.rules, singleDay);
+  const lastYear = summarizePeriod(input.lastYear, input.elapsedDays, input.rules, singleDay);
+  const phase = input.currentPhase ?? "complete";
 
   const rows: ReportLineRow[] = current.lines.map((l, i) => {
     const priorAmount = priorMonth.lines[i].amountCents;
@@ -234,32 +251,51 @@ export function computeGrowthReport(input: GrowthReportInput): GrowthReport {
       current: l.amountCents,
       priorMonth: priorAmount,
       lastYear: lastYearAmount,
-      vsPriorMonthPct: pctChange(l.amountCents, priorAmount),
-      vsLastYearPct: pctChange(l.amountCents, lastYearAmount),
+      // A period that hasn't started yet (0 elapsed days) has nothing real to compare —
+      // pctChange(0, X) would otherwise report a fabricated -100% purely from elapsed time,
+      // not an actual decline (criterion #6's "state exactly what is missing" extends to
+      // "the period itself hasn't happened," not just a missing source).
+      vsPriorMonthPct: phase === "future" ? null : pctChange(l.amountCents, priorAmount),
+      vsLastYearPct: phase === "future" ? null : pctChange(l.amountCents, lastYearAmount),
     };
   });
 
   const alerts: Alert[] = [];
-  for (const row of rows) {
-    if (!BUSINESS_LINE_ORDER.includes(row.businessLine as BusinessLine)) continue; // only the 8 lines alert, never Gross/Discounts/Total/Unmapped
-    const bl = row.businessLine as BusinessLine;
-    for (const [comparison, pct] of [["prior_month", row.vsPriorMonthPct], ["same_month_last_year", row.vsLastYearPct]] as const) {
-      if (pct == null) continue;
-      if (pct <= input.thresholds.red_pct) alerts.push({ businessLine: bl, label: row.label, comparison, direction: "down", pct });
-      else if (pct >= input.thresholds.green_pct) alerts.push({ businessLine: bl, label: row.label, comparison, direction: "up", pct });
+  if (phase !== "future") {
+    for (const row of rows) {
+      if (!BUSINESS_LINE_ORDER.includes(row.businessLine as BusinessLine)) continue; // only the 8 lines alert, never Gross/Discounts/Total/Unmapped
+      const bl = row.businessLine as BusinessLine;
+      for (const [comparison, pct] of [["prior_month", row.vsPriorMonthPct], ["same_month_last_year", row.vsLastYearPct]] as const) {
+        if (pct == null) continue;
+        if (pct <= input.thresholds.red_pct) alerts.push({ businessLine: bl, label: row.label, comparison, direction: "down", pct });
+        else if (pct >= input.thresholds.green_pct) alerts.push({ businessLine: bl, label: row.label, comparison, direction: "up", pct });
+      }
     }
   }
 
+  const currentMissing = [...current.missing];
+  const periodNoun = singleDay ? "day" : "month";
+  if (phase === "future") {
+    currentMissing.push(`This ${periodNoun} hasn't started yet — 0 of ${daysInMonth(input.current.label)} day${daysInMonth(input.current.label) === 1 ? "" : "s"} elapsed. No comparison is shown until it does.`);
+  } else if (phase === "in_progress" && !singleDay) {
+    const total = daysInMonth(input.current.label);
+    const remaining = total - current.elapsedDays;
+    currentMissing.push(`In progress — ${current.elapsedDays} of ${total} days elapsed this month (${remaining} day${remaining === 1 ? "" : "s"} remaining); every column compares the same first ${current.elapsedDays} day${current.elapsedDays === 1 ? "" : "s"}.`);
+  } else if (phase === "in_progress" && singleDay) {
+    currentMissing.push("Today is still in progress — recognized revenue may still change before the day closes out.");
+  }
+
+  const dayLabel = (n: number) => singleDay ? `the same day of the month` : `first ${n} day${n === 1 ? "" : "s"}`;
   return {
     locationSlug: input.locationSlug,
     recognitionThroughDate: input.recognitionThroughDate,
     rows,
     daysRow: { current: current.elapsedDays, priorMonth: priorMonth.elapsedDays, lastYear: lastYear.elapsedDays },
     comparisonLabels: {
-      priorMonth: `prior month, first ${priorMonth.elapsedDays} day${priorMonth.elapsedDays === 1 ? "" : "s"} (${input.priorMonth.label})`,
-      lastYear: `same month last year, first ${lastYear.elapsedDays} day${lastYear.elapsedDays === 1 ? "" : "s"} (${input.lastYear.label})`,
+      priorMonth: `prior month, ${dayLabel(priorMonth.elapsedDays)} (${input.priorMonth.label})`,
+      lastYear: `same month last year, ${dayLabel(lastYear.elapsedDays)} (${input.lastYear.label})`,
     },
-    missing: { current: current.missing, priorMonth: priorMonth.missing, lastYear: lastYear.missing },
+    missing: { current: currentMissing, priorMonth: priorMonth.missing, lastYear: lastYear.missing },
     alerts,
   };
 }
