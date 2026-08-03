@@ -24,6 +24,7 @@
     "seed:judge-admin": "tsx scripts/seed-judge-admin.ts",
     "cost:report": "tsx scripts/cost-report.ts",
     "selftest": "tsx scripts/selftest.ts",
+    "tmp:inspect": "tsx scripts/tmp-inspect.ts",
     "models:check": "tsx scripts/check-models.ts",
     "security": "tsx scripts/security-check.ts"
   },
