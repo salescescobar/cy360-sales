@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { detectAndParseUpload } from "../../../../../../packages/skills/upload-ingest/index";
+import { detectAndParseUpload, checkUploadSize } from "../../../../../../packages/skills/upload-ingest/index";
 import { readDay, writeDay, traceImportedDay, recordImportUpload, type DailySalesRow } from "../../../../../../packages/knowledge/index";
 import { saveImportFile } from "../../../../../../packages/core/storage";
 import { activeLocationSlugs } from "../../../lib/locations";
@@ -25,6 +25,13 @@ export async function POST(req: NextRequest) {
   }
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "no file uploaded" }, { status: 400 });
+  }
+  try {
+    checkUploadSize(file.size, file.name);
+  } catch (e) {
+    // Criterion #8: same cap as preview — a re-upload of an oversized file must not
+    // slip past confirm just because it skipped the preview step.
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
 
   const bytes = Buffer.from(await file.arrayBuffer());

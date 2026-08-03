@@ -197,7 +197,8 @@ export function parseGotabCsvExport(text: string): GotabExportDay[] {
     if (!Number.isFinite(transactionCount)) throw new Error(`gotab-ingest: row ${rowNum} has a non-numeric transaction_count "${row.transaction_count ?? ""}"`);
 
     const item = GotabLineItem.parse({ category: row.category, grossAmountCents, transactionCount });
-    byDate.set(row.date, [...(byDate.get(row.date) ?? []), item]);
+    const existing = byDate.get(row.date);
+    if (existing) existing.push(item); else byDate.set(row.date, [item]);
   }
 
   return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, lineItems]) => {

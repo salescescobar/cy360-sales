@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { detectAndParseUpload } from "../../../../../../packages/skills/upload-ingest/index";
+import { detectAndParseUpload, checkUploadSize } from "../../../../../../packages/skills/upload-ingest/index";
 import { readDay } from "../../../../../../packages/knowledge/index";
 import { activeLocationSlugs } from "../../../lib/locations";
 import { verifyAdminSession, ADMIN_SESSION_COOKIE_NAME } from "../../../lib/session";
@@ -24,6 +24,13 @@ export async function POST(req: NextRequest) {
   }
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "no file uploaded" }, { status: 400 });
+  }
+  try {
+    checkUploadSize(file.size, file.name);
+  } catch (e) {
+    // Criterion #8: reject before buffering — a hostile/oversized file must fail fast
+    // with a specific message, never hang the preview step or silently no-op.
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
 
   const text = Buffer.from(await file.arrayBuffer()).toString("utf8");

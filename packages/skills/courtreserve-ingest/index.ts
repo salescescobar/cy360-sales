@@ -120,7 +120,8 @@ export function parseCourtReserveCsvExport(text: string): CourtReserveExportDay[
     if (!Number.isFinite(reservationCount)) throw new Error(`courtreserve-ingest: row ${rowNum} has a non-numeric reservation_count "${row.reservation_count ?? ""}"`);
 
     const item = CourtReserveLineItem.parse({ courtType: row.court_type, grossAmountCents, reservationCount });
-    byDate.set(row.date, [...(byDate.get(row.date) ?? []), item]);
+    const existing = byDate.get(row.date);
+    if (existing) existing.push(item); else byDate.set(row.date, [item]);
   }
 
   return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, lineItems]) => {

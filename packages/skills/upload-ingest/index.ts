@@ -12,6 +12,22 @@ export type DetectedUpload =
   | { source: "gotab"; days: GotabExportDay[] }
   | { source: "courtreserve"; days: CourtReserveExportDay[] };
 
+/** A single day's GoTab/CourtReserve CSV export from either source is at most a few
+ *  thousand rows — well under this. Anything past it is rejected up front (criterion #8:
+ *  a specific message naming the problem) rather than buffered and parsed, so a
+ *  hostile/oversized upload fails fast instead of hanging the preview step. */
+export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+/** Rejects an oversized upload before its bytes are ever read into memory — call with
+ *  the File's reported size (available synchronously, no need to await arrayBuffer()). */
+export function checkUploadSize(sizeBytes: number, originalFilename: string): void {
+  if (sizeBytes > MAX_UPLOAD_BYTES) {
+    const mb = (sizeBytes / (1024 * 1024)).toFixed(1);
+    const maxMb = MAX_UPLOAD_BYTES / (1024 * 1024);
+    throw new Error(`${originalFilename}: file is ${mb}MB, which exceeds the ${maxMb}MB upload limit`);
+  }
+}
+
 /**
  * Detect + parse in one step. Throws a specific, human-readable message naming the
  * problem for anything empty, malformed, or unrecognized (criterion #8) — callers must
