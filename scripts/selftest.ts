@@ -194,6 +194,17 @@ async function main() {
     assert(!/Evan/.test(JSON.stringify(mapped.raw)), `member first name leaked into raw: ${JSON.stringify(mapped.raw)}`);
     assert(mapped.itemName.includes("Private drop in group"), `scrub should keep the rest of the description intact, got ${mapped.itemName}`);
   });
+  await t("courtreserve-ingest: a name in free-text Description that belongs to a DIFFERENT row's member is still redacted (no_customer_pii)", () => {
+    // Verified live 2026-08-03: the real "...HOA- Evan" row's own member is Angela Tennaro —
+    // "Evan" is a different member seen elsewhere in the same fetched month. Only scrubbing a
+    // row against its own two name fields misses this; the batch-wide name set must catch it.
+    const hoaRow = { FeeCategory: "Misc Fee", Subtotal: 3600, TaxTotal: 0, Total: 3600, StartDateTime: "2025-08-03T10:00:00", PaidDate: "2025-08-03", MemberFirstName: "Angela", MemberLastName: "Tennaro", Description: "Misc. Fee: 10$ Drop in registration fee for 36 players on 8/3 court bookings. Private drop in group for local HOA- Evan", FeeId: "f10", PaymentId: "p10", RelationId: null, TransactionType: "Sale", PackageInfo: null };
+    const otherRow = { FeeCategory: "Event Registration", Subtotal: 50, TaxTotal: 0, Total: 50, StartDateTime: "2025-08-13T10:00:00", PaidDate: "2025-08-13", MemberFirstName: "Evan", MemberLastName: "Addington", Description: "Shot Specific Classes", FeeId: "f11", PaymentId: "p11", RelationId: null, TransactionType: "Sale", PackageInfo: null };
+    const mapped = mapRevenueRecognitionRows([hoaRow, otherRow] as any, "orlando", { taxIncluded: false, dedupePackages: false });
+    const hoaMapped = mapped.find(r => r.feeId === "f10")!;
+    assert(!/Evan/.test(hoaMapped.itemName), `a different row's member name leaked into itemName: ${hoaMapped.itemName}`);
+    assert(hoaMapped.itemName.includes("Private drop in group"), `scrub should keep the rest of the description intact, got ${hoaMapped.itemName}`);
+  });
   await t("courtreserve-ingest: taxIncluded=false uses Subtotal, true uses Total", () => {
     const exclTax = mapRevenueRecognitionRows([recognitionFixture[0]] as any, "orlando", { taxIncluded: false, dedupePackages: false });
     assert(exclTax[0].amountCents === 10000, `expected 10000 (Subtotal), got ${exclTax[0].amountCents}`);

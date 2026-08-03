@@ -458,16 +458,18 @@ const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Description is free text a staffer typed at the point of sale — unlike MemberFirstName/
  *  MemberLastName (structured fields we drop outright), it can't simply be omitted without
- *  losing the line's meaning ("Private drop in group for local HOA- Evan"). But the row
- *  already tells us this member's own name, so any occurrence of it inside the free text is
- *  redacted the same way the structured fields are (invariant #3) — never stored, never shown
- *  in the Unmapped table (no_customer_pii). */
-function scrubMemberName(description: string, firstName: string | null | undefined, lastName: string | null | undefined): string {
+ *  losing the line's meaning ("Private drop in group for local HOA- Evan"). A name mentioned
+ *  in a row's own Description isn't always that row's own member — e.g. a group/HOA fee is
+ *  billed to one member's account but the free text names the organizer, a different member
+ *  (verified live 2026-08-03: the "...HOA- Evan" row's own MemberFirstName/MemberLastName is
+ *  "Angela"/"Tennaro" — "Evan" belongs to a different member seen elsewhere in the same
+ *  fetched range). So every name is redacted against the FULL set of member names seen across
+ *  the whole fetched batch, not just the current row's own two fields — never stored, never
+ *  shown in the Unmapped table (no_customer_pii, invariant #3). */
+function scrubMemberNames(description: string, names: ReadonlySet<string>): string {
   let scrubbed = description;
-  for (const name of [firstName, lastName]) {
-    const trimmed = name?.trim();
-    if (!trimmed || trimmed.length < 2) continue;
-    scrubbed = scrubbed.replace(new RegExp(`\\b${escapeRegExp(trimmed)}\\b`, "gi"), "[name removed]");
+  for (const name of names) {
+    scrubbed = scrubbed.replace(new RegExp(`\\b${escapeRegExp(name)}\\b`, "gi"), "[name removed]");
   }
   return scrubbed;
 }
@@ -490,6 +492,17 @@ export function mapRevenueRecognitionRows(
   const seenPackagePairs = new Set<string>();
   const out: RecognizedRevenueRow[] = [];
 
+  // Batch-wide name set (see scrubMemberNames) — every member name seen anywhere in this
+  // fetch, not just a row's own two fields. Names under 2 chars are dropped as too generic
+  // to safely redact (would eat ordinary short words out of unrelated descriptions).
+  const allMemberNames = new Set<string>();
+  for (const row of rows) {
+    for (const name of [row.MemberFirstName, row.MemberLastName]) {
+      const trimmed = name?.trim();
+      if (trimmed && trimmed.length >= 2) allMemberNames.add(trimmed);
+    }
+  }
+
   rows.forEach((row, i) => {
     if (cfg.dedupePackages && row.PackageInfo != null && row.FeeId != null && row.RelationId != null) {
       const key = `${row.FeeId}::${row.RelationId}`;
@@ -510,7 +523,7 @@ export function mapRevenueRecognitionRows(
     const externalId = row.FeeId != null || row.PaymentId != null || row.RelationId != null
       ? `${row.FeeId ?? ""}::${row.PaymentId ?? ""}::${row.RelationId ?? ""}`
       : `pos::${i}::${businessDate}`;
-    const description = row.Description != null ? scrubMemberName(row.Description, MemberFirstName, MemberLastName) : row.Description;
+    const description = row.Description != null ? scrubMemberNames(row.Description, allMemberNames) : row.Description;
     if (raw.Description != null) raw.Description = description;
     out.push({
       locationSlug,
