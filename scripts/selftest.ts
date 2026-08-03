@@ -2,7 +2,7 @@
  * Self-test: CY360 Sales proves its own acceptance criteria (spec #1 v2, section 6) plus
  * the shared framework infra (checkpoint, router, autonomous-loop budget policy) it runs on.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoPath } from "../packages/core/paths";
@@ -410,6 +410,66 @@ async function main() {
     assert(!existsSync(join(loopDir, "budget-approved")), "approval not consumed");
     rmSync(`${loopDir}/costs.jsonl`, { force: true });
   });
+
+  // 14 · live smoke test: the app actually boots and answers real HTTP requests. This runs
+  // entirely inside this already-permitted `npm run selftest` process via Node's built-in
+  // fetch — no curl/WebFetch/browser-automation tool call is needed to get this evidence,
+  // which matters because a tester's sandbox may not have those granted separately.
+  const SMOKE_PORT = Number(process.env.SELFTEST_SMOKE_PORT ?? 3000);
+  const SMOKE_BASE = `http://127.0.0.1:${SMOKE_PORT}`;
+  const fetchWithTimeout = async (path: string, opts: RequestInit = {}) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    try { return await fetch(`${SMOKE_BASE}${path}`, { ...opts, signal: controller.signal }); }
+    finally { clearTimeout(timer); }
+  };
+  const isUp = async () => { try { return (await fetchWithTimeout("/login")).status < 500; } catch { return false; } };
+  const waitUntilUp = async (timeoutMs: number) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await isUp()) return;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error(`server did not respond on ${SMOKE_BASE} within ${timeoutMs}ms`);
+  };
+
+  let smokeServer: ChildProcess | null = null;
+  try {
+    if (!(await isUp())) {
+      smokeServer = spawn("npm", ["run", "dev", "--workspace", "web"], {
+        cwd: repoPath("."),
+        env: { ...process.env, PORT: String(SMOKE_PORT) },
+        stdio: "ignore",
+      });
+      await waitUntilUp(90_000);
+    }
+
+    await t("live smoke: /login serves the sign-in page over real HTTP", async () => {
+      const r = await fetchWithTimeout("/login");
+      const body = await r.text();
+      assert(r.status === 200, `expected 200, got ${r.status}`);
+      assert(body.includes("Sign in") && body.includes("CY360 Sales"), "login page missing expected copy");
+    });
+    await t("live smoke: /admin/login serves the admin sign-in page", async () => {
+      const r = await fetchWithTimeout("/admin/login");
+      const body = await r.text();
+      assert(r.status === 200, `expected 200, got ${r.status}`);
+      assert(body.includes("Admin") && body.includes("Sign in"), "admin login page missing expected copy");
+    });
+    await t("live smoke: / redirects an anonymous visitor to /login, never 500s", async () => {
+      const r = await fetchWithTimeout("/", { redirect: "follow" });
+      assert(r.status === 200, `expected 200 after redirect, got ${r.status}`);
+      assert(r.url.endsWith("/login"), `expected to land on /login, got ${r.url}`);
+    });
+    await t("live smoke: an unknown route renders the branded 404, not a stack trace", async () => {
+      const r = await fetchWithTimeout("/this-route-does-not-exist");
+      const body = await r.text();
+      assert(r.status === 404, `expected 404, got ${r.status}`);
+      assert(!/Internal Server Error|at Object\.|node_modules\//.test(body), "leaked a stack trace to the user");
+    });
+  } finally {
+    if (smokeServer) smokeServer.kill("SIGTERM");
+  }
 
   rmSync(repoPath(".local-storage", "warehouse", testLocation), { recursive: true, force: true });
 
