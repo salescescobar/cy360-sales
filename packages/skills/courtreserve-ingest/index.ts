@@ -454,6 +454,24 @@ export type RecognizedRevenueRow = {
 
 export type RecognitionConfig = { taxIncluded: boolean; dedupePackages: boolean };
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Description is free text a staffer typed at the point of sale — unlike MemberFirstName/
+ *  MemberLastName (structured fields we drop outright), it can't simply be omitted without
+ *  losing the line's meaning ("Private drop in group for local HOA- Evan"). But the row
+ *  already tells us this member's own name, so any occurrence of it inside the free text is
+ *  redacted the same way the structured fields are (invariant #3) — never stored, never shown
+ *  in the Unmapped table (no_customer_pii). */
+function scrubMemberName(description: string, firstName: string | null | undefined, lastName: string | null | undefined): string {
+  let scrubbed = description;
+  for (const name of [firstName, lastName]) {
+    const trimmed = name?.trim();
+    if (!trimmed || trimmed.length < 2) continue;
+    scrubbed = scrubbed.replace(new RegExp(`\\b${escapeRegExp(trimmed)}\\b`, "gi"), "[name removed]");
+  }
+  return scrubbed;
+}
+
 /**
  * Maps raw revenuerecognition rows into RecognizedRevenueRow, obeying config.report.recognition
  * (spec section 4: "the chosen rule lives in config ... and the report obeys it"):
@@ -492,6 +510,8 @@ export function mapRevenueRecognitionRows(
     const externalId = row.FeeId != null || row.PaymentId != null || row.RelationId != null
       ? `${row.FeeId ?? ""}::${row.PaymentId ?? ""}::${row.RelationId ?? ""}`
       : `pos::${i}::${businessDate}`;
+    const description = row.Description != null ? scrubMemberName(row.Description, MemberFirstName, MemberLastName) : row.Description;
+    if (raw.Description != null) raw.Description = description;
     out.push({
       locationSlug,
       source: "courtreserve",
@@ -499,7 +519,7 @@ export function mapRevenueRecognitionRows(
       businessDate,
       periodMonth: businessDate.slice(0, 7),
       groupName: row.FeeCategory,
-      itemName: row.Description ?? row.FeeCategory,
+      itemName: description ?? row.FeeCategory,
       amountCents: toCentsFromAmount(cfg.taxIncluded ? row.Total : row.Subtotal),
       taxCents: toCentsFromAmount(row.TaxTotal),
       netCents: toCentsFromAmount(row.Subtotal),

@@ -254,9 +254,12 @@ export function computeGrowthReport(input: GrowthReportInput): GrowthReport {
       // A period that hasn't started yet (0 elapsed days) has nothing real to compare —
       // pctChange(0, X) would otherwise report a fabricated -100% purely from elapsed time,
       // not an actual decline (criterion #6's "state exactly what is missing" extends to
-      // "the period itself hasn't happened," not just a missing source).
-      vsPriorMonthPct: phase === "future" ? null : pctChange(l.amountCents, priorAmount),
-      vsLastYearPct: phase === "future" ? null : pctChange(l.amountCents, lastYearAmount),
+      // "the period itself hasn't happened," not just a missing source). Same fabrication
+      // happens any time THIS period's line is exactly zero (h_zero_vs_dash): the amount cell
+      // already renders as an em dash (fmtUsd never shows $0.00), so a "-100%" badge next to
+      // a dash is a contradiction, not a real decline — suppress the % rather than imply one.
+      vsPriorMonthPct: phase === "future" || l.amountCents === 0 ? null : pctChange(l.amountCents, priorAmount),
+      vsLastYearPct: phase === "future" || l.amountCents === 0 ? null : pctChange(l.amountCents, lastYearAmount),
     };
   });
 

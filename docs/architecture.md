@@ -12,8 +12,11 @@
                                       ├─► skills/gotab-ingest (F&B, CSV/API)
                                       └─► skills/courtreserve-ingest (courts, CSV/API)
                                       └─► skills/metrics (daily + monthly aggregates)
+  Vercel Cron (~6:15 ET) ──► GET /api/cron/alerts ──► loops.runGrowthAlerts() ──► Slack
+    (config.yaml alerts.slack_channel) when a business line breaches report.thresholds —
+    idempotent alongside the alerts already fired as part of /api/cron/refresh (criterion #5)
   Vercel Cron (~6:30 ET) ──► GET /api/cron/watchdog ──► Slack #ops if the 6:00 run never fired
-    (Vercel Cron schedules are UTC-only, so apps/web/vercel.json pins 10:00/10:30 UTC —
+    (Vercel Cron schedules are UTC-only, so apps/web/vercel.json pins 10:00/10:15/10:30 UTC —
     the EDT wall-clock target; it drifts an hour during EST. scripts/watchdog.ts runs the
     same check by hand/CI outside Vercel.)
   ──────────────────────────────────────────────────────────────────────────

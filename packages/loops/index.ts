@@ -45,16 +45,24 @@ export type LoopsCfg = {
     recognition: { tax_included: boolean; dedupe_packages: boolean };
     alerts: { slack: boolean; max_per_line_per_day: number };
   };
+  // Top-level alerts destination (distinct from report.alerts, which just gates whether
+  // growth-report alerts fire at all). slack_channel is the one config value an operator
+  // must set per deployment; a webhook URL is already scoped to one channel when Slack
+  // issues it, but posting `channel` explicitly keeps this config value meaningful instead
+  // of dead, and lets a bot-token-based sender (chat.postMessage) target it directly.
+  alerts?: { slack_channel?: string };
 };
 
 export function loadCfg(): LoopsCfg {
   return parse(readFileSync(repoPath("config.yaml"), "utf8")) as LoopsCfg;
 }
 
-export async function notifySlack(text: string): Promise<void> {
+export async function notifySlack(text: string, channel?: string): Promise<void> {
   const hook = process.env.SLACK_WEBHOOK_URL;
   if (!hook) return;
-  await fetch(hook, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).catch(() => undefined);
+  const body: Record<string, unknown> = { text };
+  if (channel) body.channel = channel;
+  await fetch(hook, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => undefined);
 }
 
 export type LocationRefreshResult = {
@@ -183,6 +191,7 @@ export async function refreshLocationDay(
   if (status === "incomplete") {
     await notifySlack(
       `⚠ CY360 Sales refresh incomplete — ${locationSlug} ${date}: gotab=${gotabStatus}, courtreserve=${courtreserveStatus}${error ? ` (${error})` : ""}`,
+      cfg.alerts?.slack_channel,
     );
   }
   return { locationSlug, date, gotabStatus, courtreserveStatus, status, error };
@@ -252,7 +261,10 @@ export async function runGrowthAlerts(date: string, cfg: LoopsCfg = loadCfg()): 
         comparison: alert.comparison, pct: alert.pct,
         message: `${alert.direction === "up" ? "📈" : "📉"} ${locationSlug} — ${alert.label} is ${alert.pct > 0 ? "+" : ""}${alert.pct}% vs ${alert.comparison === "prior_month" ? "prior month" : "same month last year"}`,
       });
-      if (sent) await notifySlack(`${alert.direction === "up" ? "📈" : "📉"} CY360 Sales — ${locationSlug}: ${alert.label} is ${alert.pct > 0 ? "+" : ""}${alert.pct}% vs ${alert.comparison === "prior_month" ? "prior month" : "same month last year"}`);
+      if (sent) await notifySlack(
+        `${alert.direction === "up" ? "📈" : "📉"} CY360 Sales — ${locationSlug}: ${alert.label} is ${alert.pct > 0 ? "+" : ""}${alert.pct}% vs ${alert.comparison === "prior_month" ? "prior month" : "same month last year"}`,
+        cfg.alerts?.slack_channel,
+      );
     }
   }
 }
@@ -293,6 +305,7 @@ export async function runWatchdog(now: Date = new Date(), cfg: LoopsCfg = loadCf
   if (result.missedLocations.length > 0) {
     await notifySlack(
       `🚨 CY360 Sales: no refresh ran for ${result.expectedDate} at ${result.missedLocations.join(", ")} — the 6:00 a.m. ET cron may not have fired.`,
+      cfg.alerts?.slack_channel,
     );
   }
   return result;

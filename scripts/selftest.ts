@@ -187,6 +187,13 @@ async function main() {
       assert(!("MemberFirstName" in r.raw) && !("MemberLastName" in r.raw), `PII leaked into raw: ${JSON.stringify(r.raw)}`);
     }
   });
+  await t("courtreserve-ingest: a member's name embedded in free-text Description is redacted, not just the structured fields (no_customer_pii)", () => {
+    const row = { FeeCategory: "Misc Fee", Subtotal: 3600, TaxTotal: 0, Total: 3600, StartDateTime: "2026-08-03T10:00:00", PaidDate: "2026-08-03", MemberFirstName: "Evan", MemberLastName: "Smith", Description: "Misc. Fee: 10$ Drop in registration fee for 36 players on 8/3 court bookings. Private drop in group for local HOA- Evan", FeeId: "f9", PaymentId: "p9", RelationId: null, TransactionType: "Sale", PackageInfo: null };
+    const [mapped] = mapRevenueRecognitionRows([row] as any, "orlando", { taxIncluded: false, dedupePackages: false });
+    assert(!/Evan/.test(mapped.itemName), `member first name leaked into itemName: ${mapped.itemName}`);
+    assert(!/Evan/.test(JSON.stringify(mapped.raw)), `member first name leaked into raw: ${JSON.stringify(mapped.raw)}`);
+    assert(mapped.itemName.includes("Private drop in group"), `scrub should keep the rest of the description intact, got ${mapped.itemName}`);
+  });
   await t("courtreserve-ingest: taxIncluded=false uses Subtotal, true uses Total", () => {
     const exclTax = mapRevenueRecognitionRows([recognitionFixture[0]] as any, "orlando", { taxIncluded: false, dedupePackages: false });
     assert(exclTax[0].amountCents === 10000, `expected 10000 (Subtotal), got ${exclTax[0].amountCents}`);
@@ -299,6 +306,18 @@ async function main() {
     assert(total.current === 0 && total.vsPriorMonthPct === null && total.vsLastYearPct === null, `future period must never fabricate a pct, got ${JSON.stringify(total)}`);
     assert(report.alerts.length === 0, `future period must never alert, got ${JSON.stringify(report.alerts)}`);
     assert(report.missing.current.some(m => /hasn't started/i.test(m)), `expected a "hasn't started" message, got ${JSON.stringify(report.missing.current)}`);
+  });
+  await t("growth-report: a line with zero this period suppresses its % instead of a fabricated -100% (h_zero_vs_dash)", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 1, currentPhase: "in_progress",
+      current: { label: "2026-08", courtRows: [], gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2026-07", courtRows: [rowsFor("2026-07-01", "Reservation", 5000)], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-08", courtRows: [], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2026-08-01",
+    });
+    const pickleball = report.rows.find(r => r.businessLine === "pickleball")!;
+    assert(pickleball.current === 0 && pickleball.vsPriorMonthPct === null, `expected a suppressed pct, not a fabricated -100%, got ${JSON.stringify(pickleball)}`);
+    assert(!report.alerts.some(a => a.businessLine === "pickleball"), `a zero-current line must never alert off a fabricated -100%, got ${JSON.stringify(report.alerts)}`);
   });
   await t("growth-report: an in-progress month states elapsed/remaining days but still compares normally (incomplete_labelled)", () => {
     const report = computeGrowthReport({

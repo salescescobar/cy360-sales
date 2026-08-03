@@ -49,7 +49,7 @@ footage:
   input: /tmp/court2.mp4      # the client video the loop processes; FOOTAGE_PATH env overrides
   logo: ""                    # optional local logo path for the overlay
 alerts:
-  slack_channel: "#ops-CHANGE_ME"
+  slack_channel: "#cy360-sales-alerts"   # posted alongside SLACK_WEBHOOK_URL (see .env.example) via /api/cron/alerts
 models:                          # the router decides. Never hardcode a model in code.
   # Adopting a new model (e.g. a future opus-5): `npm run models:check` must list it
   # under YOUR key, verify pricing on anthropic.com/pricing, then edit ONE line here.
