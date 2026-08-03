@@ -8,6 +8,9 @@ its agent's index. Each skill: one job, typed input/output, traced, independentl
 | gotab-ingest | A | Normalize a day of GoTab (F&B) sales | CSV today, GoTab API when GOTAB_API_KEY arrives |
 | courtreserve-ingest | A | Normalize a day of CourtReserve court activity | CSV today, CourtReserve API when COURTRESERVE_API_KEY arrives |
 | metrics | B | Daily + monthly aggregates, comparatives | pure functions over normalized rows |
+| business-lines | A | Resolve a source (group, item) pair to a report business line | business_line_map, never hardcoded |
+| growth-report | B | The v5 three-column-per-line growth report + drill-down + hourly curve | recognized revenue + GoTab breakdowns |
+| reconciliation | B | Recognized vs payment-basis totals per FeeCategory/TransactionType, with delta | spec #1 v5 section 4 |
 | web-research | A | Search the web, vet sources, return cited text | Anthropic web search or Tavily + Firecrawl |
 | role-permissions | B | Who can ask for what | config + core |
 | evaluator-optimizer | E | Self-check before finishing | core |
