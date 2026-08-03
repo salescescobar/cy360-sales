@@ -10,9 +10,14 @@
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { ingestGotabDay } from "../skills/gotab-ingest/index";
-import { ingestCourtReserveDay, ingestCourtReserveDetail, aggregateCourtReserveDetailToDay, type CourtReserveDetailedRow } from "../skills/courtreserve-ingest/index";
-import { writeDay, readDay, traceRefresh, readTraces, type DailySalesRow, type RefreshStatus } from "../knowledge/index";
+import {
+  ingestCourtReserveDay, ingestCourtReserveDetail, aggregateCourtReserveDetailToDay, ingestRecognizedRevenue,
+  type CourtReserveDetailedRow, type RevenueRecognitionRow, type RecognitionConfig,
+} from "../skills/courtreserve-ingest/index";
+import { writeDay, readDay, readMonth, traceRefresh, readTraces, type DailySalesRow, type RefreshStatus } from "../knowledge/index";
 import { replaceCourtReserveDetail } from "../knowledge/courtreserve";
+import { replaceRecognizedRevenue, readRecognizedRevenue, listBusinessLineRules, tryRecordAlert } from "../knowledge/revenue";
+import { computeGrowthReport, priorMonthOf, sameMonthLastYearOf, lastDayOfMonth, type GotabDayInput, type PeriodInput } from "../skills/growth-report/index";
 import { repoPath } from "../core/paths";
 
 export type Trigger =
@@ -34,6 +39,11 @@ export type LoopsCfg = {
     // through an admin's confirmed /import upload. The daily refresh never auto-ingests it.
     gotab: { enabled: boolean; mode: "csv" | "api" | "browser" | "upload" };
     courtreserve: { enabled: boolean; mode: "csv" | "api"; locations?: string[] };
+  };
+  report?: {
+    thresholds: { green_pct: number; red_pct: number };
+    recognition: { tax_included: boolean; dedupe_packages: boolean };
+    alerts: { slack: boolean; max_per_line_per_day: number };
   };
 };
 
@@ -71,7 +81,10 @@ export async function refreshLocationDay(
   gotabOpts: { fetchText?: (locationSlug: string, date: string) => Promise<string> } = {},
   // Only set by tests and future scripts needing an offline/injected CourtReserve API
   // response — the real daily cron and /api/cron/refresh always go through the live client.
-  courtreserveOpts: { fetchDetailedRows?: (startDate: string, endDate: string) => Promise<CourtReserveDetailedRow[]> } = {},
+  courtreserveOpts: {
+    fetchDetailedRows?: (startDate: string, endDate: string) => Promise<CourtReserveDetailedRow[]>;
+    fetchRevenueRecognitionRows?: (startDate: string, endDate: string) => Promise<RevenueRecognitionRow[]>;
+  } = {},
 ): Promise<LocationRefreshResult> {
   let gotabStatus: RefreshStatus = "missing";
   let courtreserveStatus: RefreshStatus = "missing";
@@ -123,6 +136,17 @@ export async function refreshLocationDay(
           error = [error, `courtreserve detail write: ${(e as Error).message}`].filter(Boolean).join("; ");
         }
       }
+      // Recognized revenue (spec #1 v5 section 3 — THE report source) is additive to the
+      // salessummarydetailed-based detail above: same day, service-date basis instead of
+      // payment-date. A failure here must not flip the day's complete/incomplete status
+      // either — only surface in the trace's error field, same as the detail write above.
+      try {
+        const recognitionCfg: RecognitionConfig = { taxIncluded: cfg.report?.recognition.tax_included ?? false, dedupePackages: cfg.report?.recognition.dedupe_packages ?? true };
+        const recognized = await ingestRecognizedRevenue(locationSlug, date, date, recognitionCfg, { fetchRows: courtreserveOpts.fetchRevenueRecognitionRows });
+        await replaceRecognizedRevenue(locationSlug, date, date, recognized);
+      } catch (e) {
+        error = [error, `courtreserve recognized-revenue write: ${(e as Error).message}`].filter(Boolean).join("; ");
+      }
     } catch (e) {
       courtreserveStatus = "error";
       error = [error, `courtreserve: ${(e as Error).message}`].filter(Boolean).join("; ");
@@ -172,7 +196,62 @@ export function activeLocations(cfg: LoopsCfg = loadCfg()): string[] {
 export async function runDailySalesRefresh(date: string, cfg: LoopsCfg = loadCfg()): Promise<LocationRefreshResult[]> {
   const results: LocationRefreshResult[] = [];
   for (const slug of activeLocations(cfg)) results.push(await refreshLocationDay(slug, date, cfg));
+  // Alerts need the whole month's picture (this day's row alone can't tell a business line
+  // it's up or down) — run once per refresh, after every location's day has landed.
+  await runGrowthAlerts(date, cfg);
   return results;
+}
+
+async function buildPeriodInput(locationSlug: string, month: string): Promise<PeriodInput> {
+  const from = `${month}-01`;
+  const to = lastDayOfMonth(month);
+  let courtRows: PeriodInput["courtRows"] = [];
+  let courtreserveOk = true;
+  try {
+    courtRows = await readRecognizedRevenue(locationSlug, from, to);
+  } catch {
+    courtreserveOk = false;
+  }
+  const daysMap = await readMonth(locationSlug, month);
+  const gotabDays: GotabDayInput[] = [...daysMap.entries()].map(([d, rows]) => {
+    const gotab = rows.find(r => r.source === "gotab");
+    return { date: d, status: gotab ? "complete" : "incomplete", breakdown: gotab?.breakdown ?? {} };
+  });
+  return { label: month, courtRows, gotabDays, courtreserveOk };
+}
+
+/**
+ * Criterion #5: raise an alert when a line breaches report.thresholds versus EITHER
+ * comparison, pushed to Slack at most once per day per line. `date` is the ET business date
+ * the triggering refresh ran for — its month is "this month to date", elapsedDays is its
+ * day-of-month, matching the dashboard's own growth report exactly (same inputs, same math).
+ */
+export async function runGrowthAlerts(date: string, cfg: LoopsCfg = loadCfg()): Promise<void> {
+  if (cfg.report?.alerts.slack === false) return;
+  const month = date.slice(0, 7);
+  const elapsedDays = Number(date.slice(8, 10));
+  const rules = await listBusinessLineRules();
+  const thresholds = cfg.report?.thresholds ?? { green_pct: 5, red_pct: -5 };
+
+  for (const locationSlug of activeLocations(cfg)) {
+    const [current, priorMonth, lastYear] = await Promise.all([
+      buildPeriodInput(locationSlug, month),
+      buildPeriodInput(locationSlug, priorMonthOf(month)),
+      buildPeriodInput(locationSlug, sameMonthLastYearOf(month)),
+    ]);
+    const report = computeGrowthReport({
+      locationSlug, elapsedDays, current, priorMonth, lastYear, rules, thresholds,
+      recognitionThroughDate: date,
+    });
+    for (const alert of report.alerts) {
+      const sent = await tryRecordAlert({
+        locationSlug, businessLine: alert.businessLine, sentOn: date, direction: alert.direction,
+        comparison: alert.comparison, pct: alert.pct,
+        message: `${alert.direction === "up" ? "📈" : "📉"} ${locationSlug} — ${alert.label} is ${alert.pct > 0 ? "+" : ""}${alert.pct}% vs ${alert.comparison === "prior_month" ? "prior month" : "same month last year"}`,
+      });
+      if (sent) await notifySlack(`${alert.direction === "up" ? "📈" : "📉"} CY360 Sales — ${locationSlug}: ${alert.label} is ${alert.pct > 0 ? "+" : ""}${alert.pct}% vs ${alert.comparison === "prior_month" ? "prior month" : "same month last year"}`);
+    }
+  }
 }
 
 /** Calendar date (YYYY-MM-DD) in America/New_York for an instant — the refresh always targets ET days. */

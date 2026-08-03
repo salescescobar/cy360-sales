@@ -336,6 +336,140 @@ export async function ingestCourtReserveDetail(
   return { transactions, reservations, paymentTypeTotals };
 }
 
+// ── revenuerecognition/list — THE report source (spec #1 v5 section 3) ──
+// Filters by SERVICE date (StartDateTime), not payment date — distinct from
+// salessummarydetailed above, which stays the payment-basis reconciliation counterpart
+// (spec section 4). Params are literally `start`/`end` (not paymentStartDate/paymentEndDate).
+
+export const RevenueRecognitionRow = z.object({
+  FeeCategory: z.string(),
+  Subtotal: z.number(),
+  TaxTotal: z.number(),
+  Total: z.number(),
+  PaymentType: z.string().nullish(),
+  StartDateTime: z.string(),
+  EndDateTime: z.string().nullish(),
+  PaidDate: z.string().nullish(),
+  OrganizationMemberId: z.union([z.string(), z.number()]).nullish(),
+  MemberFirstName: z.string().nullish(),
+  MemberLastName: z.string().nullish(),
+  Description: z.string().nullish(),
+  AdditionalDates: z.union([z.string(), z.array(z.unknown())]).nullish(),
+  FeeId: z.union([z.string(), z.number()]).nullish(),
+  PaymentId: z.union([z.string(), z.number()]).nullish(),
+  RelationId: z.union([z.string(), z.number()]).nullish(),
+  TransactionType: z.string().nullish(),
+  PackageInfo: z.unknown().nullish(),
+});
+export type RevenueRecognitionRow = z.infer<typeof RevenueRecognitionRow>;
+
+type RevenueRecognitionResponse = { ErrorMessage?: string | null; Data: unknown[] };
+
+/** Live call to revenuerecognition/list. Same org-mismatch guard as salessummarydetailed. */
+export async function fetchRevenueRecognitionRows(
+  startDate: string,
+  endDate: string,
+  creds: CourtReserveApiCreds = courtReserveCredsFromEnv(),
+): Promise<RevenueRecognitionRow[]> {
+  const url = `${COURTRESERVE_API_BASE}/api/v1/revenuerecognition/list?start=${startDate}&end=${endDate}`;
+  const auth = Buffer.from(`${creds.user}:${creds.pass}`).toString("base64");
+  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" } });
+  if (!res.ok) throw new Error(`courtreserve-ingest: revenuerecognition API request failed: ${res.status} ${await res.text()}`);
+
+  const body = (await res.json()) as RevenueRecognitionResponse;
+  if (body.ErrorMessage) throw new Error(`courtreserve-ingest: revenuerecognition API returned an error: ${body.ErrorMessage}`);
+  return body.Data.map(r => RevenueRecognitionRow.parse(r));
+}
+
+export type RecognizedRevenueRow = {
+  locationSlug: string;
+  source: "courtreserve";
+  externalId: string; // FeeId::PaymentId::RelationId (falls back to a positional id when all three are absent)
+  businessDate: string; // YYYY-MM-DD, date(StartDateTime) — service date, never payment date
+  periodMonth: string; // YYYY-MM, derived from businessDate
+  groupName: string; // FeeCategory
+  itemName: string; // Description
+  amountCents: number; // Subtotal or Total per config.report.recognition.tax_included
+  taxCents: number;
+  netCents: number; // always tax-exclusive (Subtotal), regardless of amountCents's basis
+  transactionType: string | null;
+  paymentType: string | null;
+  feeId: string | null;
+  paymentId: string | null;
+  relationId: string | null;
+  recognizedOn: string | null; // PaidDate
+  raw: Record<string, unknown>; // source row MINUS MemberFirstName/MemberLastName (invariant #3)
+};
+
+export type RecognitionConfig = { taxIncluded: boolean; dedupePackages: boolean };
+
+/**
+ * Maps raw revenuerecognition rows into RecognizedRevenueRow, obeying config.report.recognition
+ * (spec section 4: "the chosen rule lives in config ... and the report obeys it"):
+ *  - taxIncluded picks Total (tax-in) vs Subtotal (tax-out) as the displayed amount.
+ *  - dedupePackages: a PackageInfo row can appear twice — once as the purchase, once as each
+ *    usage/redemption — sharing the same RelationId. When on, only the FIRST row seen per
+ *    (FeeId, RelationId) pair is kept; the rest are dropped from the recognized total (still
+ *    visible in the Reconciliation view via the unfiltered payment-basis side, spec section 4).
+ * Never fabricates a rule the CEO hasn't chosen — this only ever applies what config says.
+ */
+export function mapRevenueRecognitionRows(
+  rows: RevenueRecognitionRow[],
+  locationSlug: string,
+  cfg: RecognitionConfig,
+): RecognizedRevenueRow[] {
+  const seenPackagePairs = new Set<string>();
+  const out: RecognizedRevenueRow[] = [];
+
+  rows.forEach((row, i) => {
+    if (cfg.dedupePackages && row.PackageInfo != null && row.FeeId != null && row.RelationId != null) {
+      const key = `${row.FeeId}::${row.RelationId}`;
+      if (seenPackagePairs.has(key)) return;
+      seenPackagePairs.add(key);
+    }
+
+    const { MemberFirstName, MemberLastName, ...raw } = row;
+    const businessDate = row.StartDateTime.slice(0, 10);
+    const externalId = row.FeeId != null || row.PaymentId != null || row.RelationId != null
+      ? `${row.FeeId ?? ""}::${row.PaymentId ?? ""}::${row.RelationId ?? ""}`
+      : `pos::${i}::${businessDate}`;
+    out.push({
+      locationSlug,
+      source: "courtreserve",
+      externalId,
+      businessDate,
+      periodMonth: businessDate.slice(0, 7),
+      groupName: row.FeeCategory,
+      itemName: row.Description ?? row.FeeCategory,
+      amountCents: toCentsFromAmount(cfg.taxIncluded ? row.Total : row.Subtotal),
+      taxCents: toCentsFromAmount(row.TaxTotal),
+      netCents: toCentsFromAmount(row.Subtotal),
+      transactionType: row.TransactionType ?? null,
+      paymentType: row.PaymentType ?? null,
+      feeId: row.FeeId != null ? String(row.FeeId) : null,
+      paymentId: row.PaymentId != null ? String(row.PaymentId) : null,
+      relationId: row.RelationId != null ? String(row.RelationId) : null,
+      recognizedOn: row.PaidDate ?? null,
+      raw,
+    });
+  });
+  return out;
+}
+
+/** Gather step for the recognized-revenue ingest: fetch the raw range once, apply the
+ *  config-driven mapping. Used by both the daily refresh and `npm run backfill:courtreserve`. */
+export async function ingestRecognizedRevenue(
+  locationSlug: string,
+  startDate: string,
+  endDate: string,
+  cfg: RecognitionConfig,
+  opts: { fetchRows?: (startDate: string, endDate: string) => Promise<RevenueRecognitionRow[]>; creds?: CourtReserveApiCreds } = {},
+): Promise<RecognizedRevenueRow[]> {
+  const fetcher = opts.fetchRows ?? ((s: string, e: string) => fetchRevenueRecognitionRows(s, e, opts.creds));
+  const rawRows = await fetcher(startDate, endDate);
+  return mapRevenueRecognitionRows(rawRows, locationSlug, cfg);
+}
+
 /**
  * Collapses a day's mapped transactions into the same CourtReserveDay shape the CSV path
  * produces, so metrics/dashboard never change when sources.courtreserve.mode flips to api

@@ -149,7 +149,164 @@ async function main() {
     assert(readFileSync(importsFile, "utf8").includes(testLocation), "record for this test location not found");
   });
 
-  // 6 · checkpoint fails closed (shared infra — the hard gate any future sensitive action builds on)
+  // 6 · business-lines: resolves via business_line_map (never hardcoded), unmapped when nothing matches
+  const { resolveBusinessLine, DEFAULT_BUSINESS_LINE_RULES, UNMAPPED } = await import("../packages/skills/business-lines/index");
+  await t("business-lines: CourtReserve FeeCategory values resolve to the right line", () => {
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "courtreserve", "Membership Fee", "Annual Membership") === "memberships", "membership");
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "courtreserve", "Reservation", "Indoor Pickleball") === "pickleball", "reservation");
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "courtreserve", "Event Registration", "Fall Tournament") === "events", "event");
+  });
+  await t("business-lines: a Package item name picks the specific rule over the generic one", () => {
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "courtreserve", "Package", "10-pack lesson bundle") === "lessons", "package->lessons");
+  });
+  await t("business-lines: nothing matches -> unmapped, never dropped (criterion #4)", () => {
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "courtreserve", "Some New Fee Type", "Mystery Item") === UNMAPPED, "expected unmapped");
+  });
+  await t("business-lines: GoTab categories resolve too", () => {
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "gotab", "food", "food") === "food_beverage", "food");
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "gotab", "arcade", "arcade") === "arcade", "arcade");
+  });
+
+  // 7 · courtreserve-ingest: revenuerecognition/list mapping — PII dropped, config-driven
+  // tax basis, dedupe_packages collapses a purchase+usage pair sharing (FeeId, RelationId)
+  const { mapRevenueRecognitionRows } = await import("../packages/skills/courtreserve-ingest/index");
+  const recognitionFixture = [
+    { FeeCategory: "Reservation", Subtotal: 100, TaxTotal: 7, Total: 107, StartDateTime: "2026-08-01T10:00:00", PaidDate: "2026-08-01", MemberFirstName: "Jane", MemberLastName: "Doe", Description: "Indoor Pickleball", FeeId: "f1", PaymentId: "p1", RelationId: null, TransactionType: "Sale", PackageInfo: null },
+    { FeeCategory: "Package", Subtotal: 200, TaxTotal: 0, Total: 200, StartDateTime: "2026-08-02T10:00:00", PaidDate: "2026-08-02", MemberFirstName: "Ann", MemberLastName: "Lee", Description: "Lesson bundle", FeeId: "f2", PaymentId: "p2", RelationId: "r1", TransactionType: "Purchase", PackageInfo: { sessions: 5 } },
+    { FeeCategory: "Package", Subtotal: 200, TaxTotal: 0, Total: 200, StartDateTime: "2026-08-03T10:00:00", PaidDate: "2026-08-03", MemberFirstName: "Ann", MemberLastName: "Lee", Description: "Lesson bundle", FeeId: "f2", PaymentId: "p3", RelationId: "r1", TransactionType: "Redemption", PackageInfo: { sessions: 5 } },
+  ];
+  await t("courtreserve-ingest: revenuerecognition mapping drops MemberFirstName/MemberLastName (invariant #3)", () => {
+    const mapped = mapRevenueRecognitionRows(recognitionFixture as any, "orlando", { taxIncluded: false, dedupePackages: false });
+    for (const r of mapped) {
+      assert(!("MemberFirstName" in r.raw) && !("MemberLastName" in r.raw), `PII leaked into raw: ${JSON.stringify(r.raw)}`);
+    }
+  });
+  await t("courtreserve-ingest: taxIncluded=false uses Subtotal, true uses Total", () => {
+    const exclTax = mapRevenueRecognitionRows([recognitionFixture[0]] as any, "orlando", { taxIncluded: false, dedupePackages: false });
+    assert(exclTax[0].amountCents === 10000, `expected 10000 (Subtotal), got ${exclTax[0].amountCents}`);
+    const inclTax = mapRevenueRecognitionRows([recognitionFixture[0]] as any, "orlando", { taxIncluded: true, dedupePackages: false });
+    assert(inclTax[0].amountCents === 10700, `expected 10700 (Total), got ${inclTax[0].amountCents}`);
+  });
+  await t("courtreserve-ingest: dedupe_packages collapses the purchase+redemption pair sharing (FeeId, RelationId) (spec section 4)", () => {
+    const withDedupe = mapRevenueRecognitionRows(recognitionFixture as any, "orlando", { taxIncluded: false, dedupePackages: true });
+    assert(withDedupe.length === 2, `expected 2 rows (1 reservation + 1 of the package pair), got ${withDedupe.length}`);
+    const withoutDedupe = mapRevenueRecognitionRows(recognitionFixture as any, "orlando", { taxIncluded: false, dedupePackages: false });
+    assert(withoutDedupe.length === 3, `expected all 3 rows without dedupe, got ${withoutDedupe.length}`);
+  });
+
+  // 8 · growth-report: three columns, labeled %, days row, Gross/Discounts/Total rollup,
+  // incomplete-period labeling, and threshold alerts (spec section 6 criteria #1, #2, #5, #6)
+  const { computeGrowthReport } = await import("../packages/skills/growth-report/index");
+  const growthRules = DEFAULT_BUSINESS_LINE_RULES;
+  const rowsFor = (date: string, groupName: string, amountCents: number) => ({
+    locationSlug: "orlando", source: "courtreserve" as const, externalId: `${date}-${groupName}-${amountCents}`,
+    businessDate: date, periodMonth: date.slice(0, 7), groupName, itemName: groupName,
+    amountCents, taxCents: 0, netCents: amountCents, transactionType: null, paymentType: null,
+    feeId: null, paymentId: null, relationId: null, recognizedOn: date, raw: {},
+  });
+  await t("growth-report: three columns + labeled % + days row + Gross/Discounts/Total, elapsed days respected", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando",
+      elapsedDays: 2,
+      current: { label: "2026-08", courtRows: [rowsFor("2026-08-01", "Reservation", 10000), rowsFor("2026-08-02", "Reservation", 5000), rowsFor("2026-08-03", "Reservation", 999999)], gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2026-07", courtRows: [rowsFor("2026-07-01", "Reservation", 8000), rowsFor("2026-07-02", "Reservation", 4000)], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-08", courtRows: [rowsFor("2025-08-01", "Reservation", 6000), rowsFor("2025-08-02", "Reservation", 4000)], gotabDays: [], courtreserveOk: true },
+      rules: growthRules,
+      thresholds: { green_pct: 5, red_pct: -5 },
+      recognitionThroughDate: "2026-08-02",
+    });
+    const pickleball = report.rows.find(r => r.businessLine === "pickleball")!;
+    assert(pickleball.current === 15000, `expected 15000 (Aug 3 excluded by elapsedDays), got ${pickleball.current}`);
+    assert(pickleball.priorMonth === 12000, JSON.stringify(pickleball));
+    assert(pickleball.lastYear === 10000, JSON.stringify(pickleball));
+    assert(pickleball.vsPriorMonthPct === 25, `expected +25%, got ${pickleball.vsPriorMonthPct}`);
+    assert(pickleball.vsLastYearPct === 50, `expected +50%, got ${pickleball.vsLastYearPct}`);
+    assert(report.daysRow.current === 2 && report.daysRow.priorMonth === 2 && report.daysRow.lastYear === 2, JSON.stringify(report.daysRow));
+    assert(report.comparisonLabels.priorMonth.includes("2026-07") && report.comparisonLabels.lastYear.includes("2025-08"), JSON.stringify(report.comparisonLabels));
+    const gross = report.rows.find(r => r.businessLine === "gross_revenues")!;
+    const total = report.rows.find(r => r.businessLine === "total")!;
+    assert(gross.current === 15000 && total.current === 15000, `Gross/Total should equal the only populated line, got ${JSON.stringify({ gross, total })}`);
+  });
+  await t("growth-report: negative amounts become Discounts, never netted invisibly into a business line", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 1,
+      current: { label: "2026-08", courtRows: [rowsFor("2026-08-01", "Reservation", 10000), rowsFor("2026-08-01", "Reservation", -1000)], gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2026-07", courtRows: [], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-08", courtRows: [], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2026-08-01",
+    });
+    const pickleball = report.rows.find(r => r.businessLine === "pickleball")!;
+    const discounts = report.rows.find(r => r.businessLine === "discounts")!;
+    const total = report.rows.find(r => r.businessLine === "total")!;
+    assert(pickleball.current === 10000, `business line should never absorb the discount, got ${pickleball.current}`);
+    assert(discounts.current === -1000, `expected -1000 discount, got ${discounts.current}`);
+    assert(total.current === 9000, `expected gross+discounts=9000, got ${total.current}`);
+  });
+  await t("growth-report: an incomplete/open GoTab day is excluded from totals and named in missing[] (criterion #6)", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 2,
+      current: {
+        label: "2026-08", courtRows: [],
+        gotabDays: [{ date: "2026-08-01", status: "complete", breakdown: { food: 5000 } }, { date: "2026-08-02", status: "open", breakdown: { food: 999999 } }],
+        courtreserveOk: true,
+      },
+      priorMonth: { label: "2026-07", courtRows: [], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-08", courtRows: [], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2026-08-02",
+    });
+    const fb = report.rows.find(r => r.businessLine === "food_beverage")!;
+    assert(fb.current === 5000, `open day must be excluded from the total, got ${fb.current}`);
+    assert(report.missing.current.some(m => m.includes("2026-08-02")), `expected the open day named in missing[], got ${JSON.stringify(report.missing.current)}`);
+  });
+  await t("growth-report: alerts fire on EITHER comparison breaching thresholds, never on Gross/Discounts/Total/Unmapped", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 1,
+      current: { label: "2026-08", courtRows: [rowsFor("2026-08-01", "Membership Fee", 20000)], gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2026-07", courtRows: [rowsFor("2026-07-01", "Membership Fee", 10000)], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-08", courtRows: [rowsFor("2025-08-01", "Membership Fee", 20000)], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2026-08-01",
+    });
+    assert(report.alerts.some(a => a.businessLine === "memberships" && a.direction === "up" && a.comparison === "prior_month"), JSON.stringify(report.alerts));
+    assert(!report.alerts.some(a => (a.businessLine as string) === "gross_revenues" || (a.businessLine as string) === "total"), "Gross/Total must never alert");
+  });
+
+  // 9 · reconciliation: recognized vs payment-basis per FeeCategory/TransactionType, with delta (spec section 4)
+  const { computeReconciliation } = await import("../packages/skills/reconciliation/index");
+  await t("reconciliation: groups by FeeCategory + TransactionType and computes the delta without picking a winner", () => {
+    const recognized = [rowsFor("2026-08-01", "Reservation", 15000)];
+    const paymentBasis = [{
+      locationSlug: "orlando", externalId: "tx1", businessDate: "2026-08-01", occurredAt: "2026-08-01T10:00:00",
+      category: "Reservation", itemName: "Indoor Pickleball", grossCents: 10000, taxCents: 0, netCents: 10000,
+      paymentType: "card", staffName: null, raw: { TransactionType: null },
+    }];
+    const rows = computeReconciliation(recognized, paymentBasis);
+    assert(rows.length === 1, JSON.stringify(rows));
+    assert(rows[0].recognizedCents === 15000 && rows[0].paymentBasisCents === 10000 && rows[0].deltaCents === 5000, JSON.stringify(rows[0]));
+  });
+
+  // 10 · knowledge/revenue: recognized-revenue round trip, business_line_map seeds itself,
+  // alert dedupe never sends the same (location, line, day) twice (criterion #5)
+  const { replaceRecognizedRevenue, readRecognizedRevenue, listBusinessLineRules, tryRecordAlert } = await import("../packages/knowledge/revenue");
+  await t("knowledge/revenue: replaceRecognizedRevenue/readRecognizedRevenue round-trips and replaces, never duplicates", async () => {
+    await replaceRecognizedRevenue(testLocation, "2026-08-01", "2026-08-01", [rowsFor("2026-08-01", "Reservation", 15000)]);
+    let rows = await readRecognizedRevenue(testLocation, "2026-08-01", "2026-08-01");
+    assert(rows.length === 1 && rows[0].amountCents === 15000, JSON.stringify(rows));
+    await replaceRecognizedRevenue(testLocation, "2026-08-01", "2026-08-01", [rowsFor("2026-08-01", "Reservation", 22000)]);
+    rows = await readRecognizedRevenue(testLocation, "2026-08-01", "2026-08-01");
+    assert(rows.length === 1 && rows[0].amountCents === 22000, `expected the replace to win, got ${JSON.stringify(rows)}`);
+  });
+  await t("knowledge/revenue: business_line_map seeds itself from the default rules", async () => {
+    const rules = await listBusinessLineRules();
+    assert(rules.length > 0, "expected the seeded default rules, got none");
+    assert(rules.some(r => r.businessLine === "memberships"), JSON.stringify(rules));
+  });
+  await t("knowledge/revenue: alert dedupe — the same (location, line, day) never sends twice (criterion #5)", async () => {
+    const first = await tryRecordAlert({ locationSlug: testLocation, businessLine: "pickleball", sentOn: "2026-08-01", direction: "up", comparison: "prior_month", pct: 25, message: "test" });
+    const second = await tryRecordAlert({ locationSlug: testLocation, businessLine: "pickleball", sentOn: "2026-08-01", direction: "up", comparison: "prior_month", pct: 25, message: "test" });
+    assert(first === true && second === false, `expected [true, false], got [${first}, ${second}]`);
+  });
+
+  // 11 · checkpoint fails closed (shared infra — the hard gate any future sensitive action builds on)
   const { requireCheckpoint, CheckpointPending } = await import("../packages/core/checkpoint");
   await t("checkpoint: blocks without approval (fail closed)", async () => {
     delete process.env.AILABS_APPROVAL_TOKEN;
@@ -161,7 +318,7 @@ async function main() {
     assert(r.approved, "not approved");
   });
 
-  // 7 · router: cheapest-capable ladder + escalation (shared infra, no model named outside it)
+  // 12 · router: cheapest-capable ladder + escalation (shared infra, no model named outside it)
   const { route, estimateCostUsd } = await import("../packages/core/router");
   await t("router: classify stays cheapest even on retry", () => {
     assert(route("classify", { attempt: 3 }).rung === "cheap", "escaped its ceiling");
@@ -174,7 +331,7 @@ async function main() {
     assert(c > 0 && c < 0.01, `got ${c}`);
   });
 
-  // 8 · budget policy: notify -> pause -> human approval -> resume (consumed)
+  // 13 · budget policy: notify -> pause -> human approval -> resume (consumed)
   const loopDir = repoPath(".loop");
   await t("budget: past-budget run PAUSES awaiting approval (exit 3)", () => {
     rmSync(`${loopDir}/costs.jsonl`, { force: true });
