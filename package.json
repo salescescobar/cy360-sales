@@ -24,8 +24,6 @@
     "seed:judge-admin": "tsx scripts/seed-judge-admin.ts",
     "cost:report": "tsx scripts/cost-report.ts",
     "selftest": "tsx scripts/selftest.ts",
-    "_check-revenue-range": "tsx scripts/_check-revenue-range.ts",
-    "_check-name-batch": "tsx scripts/_check-name-batch.ts",
     "models:check": "tsx scripts/check-models.ts",
     "security": "tsx scripts/security-check.ts"
   },
