@@ -87,3 +87,14 @@ refresh:
 sources:
   gotab:        { enabled: true, mode: upload }   # csv now, api when the key arrives
   courtreserve: { enabled: true, mode: api, org_id: 13523, locations: [orlando] }
+report:
+  compare: [prior_month, same_month_last_year]
+  thresholds: { green_pct: 5, red_pct: -5 }
+  recognition:
+    source: courtreserve_revenuerecognition
+    tax_included: false
+    dedupe_packages: true
+    include_categories: []
+    exclude_categories: []
+  business_lines: [food_beverage, pickleball, memberships, events, lessons, swag, arcade, sponsorships]
+  alerts: { slack: true, max_per_line_per_day: 1 }

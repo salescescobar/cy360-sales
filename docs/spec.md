@@ -1,105 +1,100 @@
-# CY360 Sales — v2 (supersedes v1; approved as issue #1)
+# CY360 Sales — v5 FINAL (supersedes all earlier versions; approved as issue #1)
 
-## 1. What we're building
-A web dashboard where each Crush Yard location manager sees their sales from GoTab (F&B) and
-CourtReserve (courts), by day and by month, with prior-period comparatives. Data enters
-through the web app: an admin uploads the CSV exports from each system and the product
-normalizes, stores and reconciles them. Orlando is live; other locations activate by config.
+## 1. What this is
+ONE report per Crush Yard location that merges GoTab (F&B, swag, arcade) with CourtReserve
+(courts, memberships, events, lessons) so a location manager knows how their operation is
+doing in under a minute — focused on GROWTH, not just totals.
 
-## 2. Why upload instead of scraping (constraint discovered in v1)
-GoTab and CourtReserve both block automated browsers (human verification), and neither
-account has API access enabled yet. So v2's supported ingestion path is UPLOAD. The API mode
-stays behind a config switch (`sources.*.mode: api`) for when credentials arrive; nothing
-about the warehouse, dashboard or metrics changes when it flips.
+Every business line shows three columns: this month to date · prior month, same elapsed days ·
+same month last year, same elapsed days. Plus alerts when a line moves outside its threshold.
 
-## 3. Acceptance criteria — THE SYSTEM SHALL
-1. WHEN an admin opens /import and uploads a GoTab or CourtReserve CSV export THE SYSTEM
-   SHALL detect which source and which date(s) it covers, show a preview of the parsed
-   totals, and only write to the warehouse after the admin confirms.
-2. WHEN a confirmed upload is written THE SYSTEM SHALL store the raw file in Supabase
-   Storage (bucket `imports`) and write one trace row per (location, date) recording which
-   sources are present.
-3. WHEN a date has data from only one source THE SYSTEM SHALL label that day "incomplete"
-   and exclude it from comparatives — partial totals are never presented as final.
-4. WHEN a manager opens their dashboard THE SYSTEM SHALL show a day view (that date's
-   totals and breakdown per source) and a month view (monthly totals plus comparative).
-5. WHEN the current month is incomplete THE SYSTEM SHALL compare LIKE FOR LIKE — the same
-   number of elapsed days in the prior month — and label the comparison in words
-   (e.g. "first 2 days vs first 2 days of July"). A raw full-month-vs-partial-month
-   percentage is a defect.
-6. WHEN re-uploading a file for a date that already has data THE SYSTEM SHALL replace that
-   (location, date, source) row rather than duplicating it, and say so in the preview.
-7. WHEN a manager signs in THE SYSTEM SHALL use credentials provisioned by an admin.
-   There is NO public self-service signup. The admin creates manager accounts from an
-   /admin/managers page; the seeded first admin is documented in README.
-8. WHEN a CSV is malformed, empty, or from an unrecognized format THE SYSTEM SHALL reject
-   it with a specific message naming the problem, and write nothing.
+## 2. RECOGNIZED REVENUE ONLY (the rule that shapes everything)
+The client's previous report mixed in future bookings whose amounts can still change. This
+product reports revenue that is RECOGNIZED — earned by service date — and states the basis on
+screen ("Recognized revenue through <date>"). Future bookings, if shown at all, live in a
+separate "Booked, not yet recognized" panel and are NEVER inside a total.
 
-## 4. Invariants — THE SYSTEM SHALL NEVER
-1. NEVER show one location's data to another location's manager. Enforced by Supabase RLS,
-   not only in the UI (URL tampering must fail).
-2. NEVER write to, modify or delete anything inside GoTab or CourtReserve.
-3. NEVER store credentials for GoTab/CourtReserve anywhere in the codebase.
-4. NEVER accept an upload into the warehouse without a trace row and a raw-file copy.
-5. NEVER expose the upload or admin pages to a non-admin session.
+## 3. VERIFIED SOURCE CONTRACTS (tested live 2026-08-03 — do not re-derive)
+CourtReserve, HTTP Basic auth: user COURTRESERVE_API_USER (Org_13523_3), pass
+COURTRESERVE_API_PASS, org 13523 = "Crush Yard - Orlando, FL".
 
-## 5. Success metrics
-- Upload to visible-on-dashboard: under 60 seconds, no terminal involved
-- Dashboard load: under 3 seconds
-- Totals within 1% of the source report (reconciliation view shows both side by side)
-- Manager answers "how did we do?" in under 1 minute, one screen
-
-## 6. Acceptance test per skill
-- gotab-ingest: real GoTab CSV fixture -> normalized rows, totals match the file
-- courtreserve-ingest: real CourtReserve CSV fixture -> normalized rows, totals match
-- metrics: fixture rows -> day and month aggregates equal hand-computed values, and the
-  partial-month comparative is like-for-like
-- upload flow (Playwright): upload -> preview -> confirm -> value appears on the dashboard;
-  malformed file rejected with a message; re-upload replaces instead of duplicating
-- isolation (Playwright): Orlando manager cannot reach another location by editing the URL
-
-## 7. Sensitive / irreversible actions
-Replacing an existing day's data on re-upload is the only destructive-ish operation: it must
-be explicit in the preview ("this will replace July 31 GoTab data") and confirmed by a human.
-
-## 8. Out of scope (v2)
-Automated scraping of either source · forecasting · writing to sources · customer PII ·
-mobile app · Nashville / Mt. Pleasant ingestion (config-ready only).
-
-## 9. Current state to build on
-Warehouse tables + RLS already exist in Supabase (locations, manager_locations, daily_sales,
-refresh_runs, managers). Storage buckets `imports` and `clips` exist. Two real GoTab days
-(2026-08-01, 2026-08-02) are already loaded and must survive.
-
-## 10. CourtReserve API — VERIFIED CONTRACT (do not re-derive; tested live 2026-08-02)
-Auth: HTTP Basic. Username `COURTRESERVE_API_USER` (e.g. Org_13523_3), password
-`COURTRESERVE_API_PASS`, org id `COURTRESERVE_ORG_ID` = 13523 ("Crush Yard - Orlando, FL").
-Base: https://api.courtreserve.com · dates accepted as YYYY-MM-DD.
-
-Endpoints in use:
+- GET /api/v1/revenuerecognition/list?start=YYYY-MM-DD&end=YYYY-MM-DD — THE report source.
+  Params are literally `start` and `end`, filtering by SERVICE date, not payment date.
+  Returns { ErrorMessage, Data: [...] }; June 2026 returned 4,579 rows. Row fields:
+  FeeCategory · Subtotal · TaxTotal · Total · PaymentType · StartDateTime · EndDateTime ·
+  PaidDate · OrganizationMemberId · MemberFirstName · MemberLastName · Description ·
+  AdditionalDates · FeeId · PaymentId · RelationId · TransactionType · PackageInfo
+  FeeCategory values seen: Event Registration · Reservation · Guest Fees - Reservations ·
+  Guest Fees - Events · Membership Fee · Package · Lesson
 - GET /api/v1/transactions/salessummarydetailed?paymentStartDate=&paymentEndDate=
-  Returns { ErrorMessage, Data: { Start, End, OrganizationId, OrganizationName,
-  DetailedRows: [...] } }. Each DetailedRow carries: FeeCategoryName, ItemName,
-  RevenueCategoryName, RevenueCategoryId, GLCode, Amount, AmountWithNoTax, TaxTotal,
-  OrgMemberId, OrgMemberFamilyId, MemberFullName, MembershipName, Start, End, CourtLabels,
-  CourtIds, ReservationId, InstructorNames, PaymentType, TransactionType, TransactionId,
-  TransactionDate, PaidDate, FamilyName, ItemCost.
-- GET /api/v1/transactions/list — transaction-level with filters (transactionStartDate,
-  transactionEndDate, paymentTypes, revenueCategoryIds, transactionTypes, ...)
-- GET /api/v1/reservationreport/listactive and /courtutilization — reservations & utilization
+  payment basis, already loaded (60,860 rows) — drill-down and reconciliation counterpart.
+- GET /api/v1/reservationreport/courtutilization?startDate=&endDate= — court utilisation.
 
-THE SYSTEM SHALL map each DetailedRow into sales_transactions with:
-external_id = TransactionId · business_date = date(PaidDate) (revenue recognized when paid) ·
-occurred_at = PaidDate · category = FeeCategoryName · item_name = ItemName ·
-gross_cents = round(Amount*100) · tax_cents = round(TaxTotal*100) ·
-net_cents = round(AmountWithNoTax*100) · payment_type = PaymentType ·
-staff_name = InstructorNames · raw = the row MINUS the PII fields below.
-It SHALL also upsert court_reservations from ReservationId + CourtLabels + Start/End, and
-payment_type_totals per (date, PaymentType).
+GoTab has NO API enabled (bot protection blocks automated login). Its daily summary is loaded
+by an operator-run backfill and by /import upload. Closed fiscal days only: a day with open
+tabs is "open" and excluded from comparatives.
 
-THE SYSTEM SHALL NEVER store MemberFullName or FamilyName — drop them before persisting.
-OrgMemberId and OrgMemberFamilyId are opaque ids and may be kept.
+## 4. THE KNOWN DISCREPANCY — build the reconciliation, don't hide it
+revenuerecognition/list sums $149,573.32 for June 2026; the client's own June report says
+$106,361.75. THE SYSTEM SHALL provide an admin Reconciliation view for any month showing, per
+FeeCategory and per TransactionType: recognized total, payment-basis total, tax, and the delta
+— so the CEO can decide the rule (which categories count, whether PackageInfo rows
+double-count purchase and usage, tax in or out). The chosen rule lives in config
+(report.recognition) and the report obeys it. Never silently pick a number that doesn't match
+the client's books.
 
-THE SYSTEM SHALL provide `npm run backfill:courtreserve -- --from=2025-01-01 --to=<today>`
-which pages the range month by month, is idempotent (re-running replaces, never duplicates),
-prints per-month row counts, and writes one `imports` audit row per month processed.
+## 5. Data model — ALREADY IN SUPABASE, additive changes only
+revenue_recognized (location, source, period_month, business_date, group_name, item_name,
+amount/tax/net cents, recognized_on, raw) · business_line_map (source, match_group,
+match_item ILIKE, business_line, priority — seeded) · sales_transactions · court_reservations
+· payment_type_totals · sales_hourly · daily_sales · refresh_runs · imports · import_uploads ·
+managers · admins · manager_locations · locations.
+Nineteen months of real data are loaded (60,860 CourtReserve transactions, 569 GoTab days) and
+MUST survive. Any migration MUST be additive AND applied to Supabase in the same run — a gate
+that passes against the local fallback is a FALSE PASS.
+
+## 6. Acceptance criteria — THE SYSTEM SHALL
+1. Show business lines in this order, resolved through business_line_map (never hardcoded):
+   Food & Beverage · Pickleball Revenue · Memberships · Events · Lessons & Classes · Swag ·
+   Arcade · Sponsorships → Gross Revenues · Discounts · Total.
+2. For each line show the three columns of §1 plus a LABELLED % per comparison, and a
+   "# Days" row stating the elapsed days used by each column.
+3. Drill down business line → group → item → transactions in at most three clicks, so any
+   figure is traceable (Pickleball → Reservation Types → "Indoor Pickleball" → its rows).
+4. Show any unmapped source item in an "Unmapped" row with its amount, and let an admin assign
+   it to a business line (writing business_line_map) — nothing is silently dropped.
+5. Raise an alert when a line breaches report.thresholds versus EITHER comparison: visible on
+   the report and pushed to Slack at most once per day per line.
+6. Label incomplete periods (missing source, or a GoTab day still open), exclude them from
+   comparatives, and state exactly what is missing.
+7. Offer a day view with the same structure plus the hourly curve where available.
+8. Provide the admin Reconciliation view of §4.
+9. Use admin-provisioned credentials only — no public signup; document the seeded admin and
+   first sign-in in README (ADMIN_EMAIL/ADMIN_PASSWORD + npm run seed:admin).
+10. Ingest via /import upload with preview-then-confirm, raw file stored, audit row written.
+
+## 7. Invariants — THE SYSTEM SHALL NEVER
+1. NEVER show one location's data to another location's manager (Supabase RLS, not only UI).
+2. NEVER include unrecognized or future revenue in a total.
+3. NEVER store customer personal data — drop MemberFirstName, MemberLastName, MemberFullName,
+   FamilyName before persisting; keep only opaque ids.
+4. NEVER write to, modify or delete anything inside GoTab or CourtReserve.
+5. NEVER expose /import, /admin or Reconciliation to a manager session or to no session.
+6. NEVER show a percentage without stating what it compares.
+
+## 8. Design — AI Labs brandbook with the client's VERIFIED palette
+Tokens already exist in apps/web/app/lib/theme.ts. USE THEM; never hardcode a colour.
+Crush Yard palette verified from crushyard.com/orlando on 2026-08-03: accent #E8503E
+(buttons, emphasis, positive movement) · accentSoft #E97263 · deep #130B36 / #1E1545 (dark
+surfaces) · muted #4B446A · text secondary #69727D, tertiary #494C4F · ink #16181D on white
+and #FAFAFA surfaces. Display type "SS Nickson One" (their heading face, Helvetica fallback);
+body Helvetica. Traffic lights up #1E8E5A · flat #B08900 · down #C0392B, ALWAYS paired with the
+number's sign — colour is never the only signal.
+Layout: thin rules under column headers, above Gross Revenues and above Total; bold ONLY on
+those two rows; tabular numerals, right-aligned figures, thousands separators, negatives in
+parentheses, em dash for absent values (never $0.00); generous whitespace; one type scale; no
+default browser tables. It must look like something a manager screenshots and sends the owner.
+
+## 9. Out of scope (v5)
+Automated scraping of GoTab · forecasting · writing to sources · customer PII · mobile app ·
+Nashville / Mt. Pleasant ingestion (config-ready only).

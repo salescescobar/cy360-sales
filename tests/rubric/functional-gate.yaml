@@ -1,24 +1,27 @@
 threshold: 90
 core:
-  - { id: loads_fast,          blocker: true,  desc: "Dashboard loads under 3s, no console errors" }
-  - { id: admin_provisions,    blocker: true,  desc: "Admin signs in with the seeded credentials from README and can create a manager account. There must be NO public self-service signup link on /login" }
-  - { id: upload_flow,         blocker: true,  desc: "Upload a CSV at /import: source and dates are detected, a preview of parsed totals is shown, and data only lands after confirming" }
-  - { id: upload_visible,      blocker: true,  desc: "After confirming an upload, those totals appear on the dashboard for that date without any terminal step" }
-  - { id: reupload_replaces,   blocker: true,  desc: "Re-uploading the same date replaces the row and the preview warns about it — no duplicated totals" }
-  - { id: bad_file_rejected,   blocker: true,  desc: "A malformed or empty CSV is rejected with a specific message and writes nothing" }
-  - { id: location_isolation,  blocker: true,  desc: "SHALL NEVER 1: a manager signed in for Orlando cannot see another location, including by editing the URL" }
-  - { id: admin_pages_guarded, blocker: true,  desc: "SHALL NEVER 5: /import and /admin are refused for a manager session and for no session" }
-  - { id: daily_view,          blocker: true,  desc: "Day view shows totals and per-source breakdown for a date that has data" }
-  - { id: monthly_like4like,   blocker: true,  desc: "Month view compares the same number of elapsed days against the prior month and labels it in words — a full-vs-partial percentage is a FAILURE" }
-  - { id: incomplete_day,      blocker: true,  desc: "A date with only one source is labelled incomplete and excluded from comparatives" }
-  - { id: clear_errors,        blocker: true,  desc: "Errors and unauthenticated access show accurate human messages, never a stack trace or a misleading claim" }
-  - { id: hostile_inputs,      blocker: true,  desc: "Malformed dates, path-traversal strings, 10k-char inputs and a 10MB file return clean errors, never a crash" }
-  - { id: security_gate,       blocker: true,  desc: "Secret scan, dependency audit and destructive-op linter green" }
-  - { id: responsive,          blocker: false, desc: "Usable at 390px and desktop" }
+  - { id: loads_fast,           blocker: true,  desc: "Report loads under 3s with no console errors" }
+  - { id: reads_supabase,       blocker: true,  desc: "The app reads the SUPABASE warehouse, not a local fallback: figures must match the 19 months of loaded data (GoTab 2026-08-01 gross is 7,363.79). Showing fixture values is a FAILURE" }
+  - { id: business_lines,       blocker: true,  desc: "Month view lists business lines in order — Food & Beverage, Pickleball Revenue, Memberships, Events, Lessons & Classes, Swag, Arcade, Sponsorships — then Gross Revenues, Discounts, Total. A single generic total is a FAILURE" }
+  - { id: three_columns,        blocker: true,  desc: "Each line shows this month-to-date, prior month same elapsed days, and same month last year same elapsed days, each with a LABELLED percentage, plus a '# Days' row" }
+  - { id: recognized_basis,     blocker: true,  desc: "The screen states the recognition basis and date; no future or unrecognized revenue sits inside any total" }
+  - { id: drilldown_3_clicks,   blocker: true,  desc: "A business line drills to group, then item, then the transaction rows behind it, for the manager's own location only" }
+  - { id: unmapped_visible,     blocker: true,  desc: "Unmapped source items appear with their amount and an admin can assign them to a business line" }
+  - { id: alerts,               blocker: true,  desc: "A line beyond threshold shows an alert on the report; the Slack path exists and fires at most once per day per line" }
+  - { id: reconciliation,       blocker: true,  desc: "Admin reconciliation view compares recognized vs payment basis per FeeCategory with deltas for a chosen month" }
+  - { id: no_customer_pii,      blocker: true,  desc: "No member names anywhere in the database or UI — inspect stored rows and confirm" }
+  - { id: location_isolation,   blocker: true,  desc: "A manager signed in for Orlando cannot reach another location, including by editing the URL" }
+  - { id: admin_guarded,        blocker: true,  desc: "/import, /admin and reconciliation refuse a manager session and no session" }
+  - { id: no_signup,            blocker: true,  desc: "No public self-service signup exists; README documents the seeded admin and first sign-in" }
+  - { id: incomplete_labelled,  blocker: true,  desc: "Incomplete periods are labelled, excluded from comparatives, and say what is missing" }
+  - { id: hostile_inputs,       blocker: true,  desc: "Malformed dates, path traversal, 10k-char inputs and a 10MB upload return clean errors, never a crash" }
+  - { id: security_gate,        blocker: true,  desc: "Secret scan, dependency audit and destructive-op linter green" }
+  - { id: design_quality,       blocker: false, desc: "Uses theme.ts tokens: Crush Yard accent #E8503E, ink #16181D, tabular right-aligned figures, negatives in parentheses, rules above Gross Revenues and Total, bold only there, em dash for absent values" }
+  - { id: responsive,           blocker: false, desc: "Usable at 390px and on desktop" }
 holdout_pool:
-  - { id: h_refresh_mid_flow, desc: "Reloading mid-flow preserves the selected view and date" }
+  - { id: h_refresh_mid_flow, desc: "Reloading mid-flow preserves the selected view, month and drill-down level" }
   - { id: h_deep_link,        desc: "A deep link to an inner page renders or redirects sensibly, never a raw 404" }
-  - { id: h_empty_state,      desc: "A date with no data explains itself instead of looking broken" }
-  - { id: h_double_submit,    desc: "Double-clicking confirm does not write the same upload twice" }
-  - { id: h_back_button,      desc: "Browser back behaves sanely after an upload" }
+  - { id: h_empty_state,      desc: "A month with no data explains itself instead of looking broken" }
+  - { id: h_zero_vs_dash,     desc: "A line with no revenue shows an em dash, not $0.00, and never a misleading -100%" }
+  - { id: h_back_button,      desc: "Browser back behaves sanely after drilling down" }
   - { id: h_stale_session,    desc: "A cleared session sends the user to sign in with an accurate message" }
