@@ -44,7 +44,7 @@ test("admin guard with manager session + location isolation + hostile inputs", a
   // location isolation
   for (const loc of ["nashville", "mt_pleasant", "../admin", "orlando/../nashville"]) {
     const resp = await page.goto(`/dashboard/${loc}`, { waitUntil: "domcontentloaded" }).catch((e) => ({ err: e.message }));
-    console.log("LOC_ISOLATION", loc, "STATUS", resp?.status ? resp.status() : resp, "FINAL_URL", page.url());
+    console.log("LOC_ISOLATION", loc, "STATUS", (resp as any)?.status ? (resp as any).status() : resp, "FINAL_URL", page.url());
     const body = await page.evaluate(() => document.body.innerText.slice(0, 300)).catch(() => "");
     console.log("BODY", body);
   }
@@ -58,7 +58,7 @@ test("admin guard with manager session + location isolation + hostile inputs", a
   ];
   for (const u of hostileUrls) {
     const resp = await page.goto(u, { waitUntil: "domcontentloaded", timeout: 15000 }).catch((e) => ({ err: e.message }));
-    console.log("HOSTILE", u.slice(0, 80), "STATUS", resp?.status ? resp.status() : JSON.stringify(resp));
+    console.log("HOSTILE", u.slice(0, 80), "STATUS", (resp as any)?.status ? (resp as any).status() : JSON.stringify(resp));
     const errs: string[] = [];
     page.once("pageerror", (e) => errs.push(e.message));
     const body = await page.evaluate(() => document.body.innerText.slice(0, 300)).catch((e) => "EVAL_ERR:" + e.message);

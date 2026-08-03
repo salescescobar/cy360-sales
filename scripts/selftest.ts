@@ -331,6 +331,18 @@ async function main() {
     assert(pickleball.vsPriorMonthPct === 100, `in-progress period must still compare normally, got ${pickleball.vsPriorMonthPct}`);
     assert(report.missing.current.some(m => /in progress/i.test(m) && /remaining/i.test(m)), `expected an in-progress/remaining-days message, got ${JSON.stringify(report.missing.current)}`);
   });
+  await t("growth-report: a genuinely empty period (e.g. outside the loaded data range) explains itself instead of a silent all-em-dash table (h_empty_state)", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 31, currentPhase: "complete",
+      current: { label: "2018-01", courtRows: [], gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2017-12", courtRows: [], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2017-01", courtRows: [], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2018-01-31",
+    });
+    const total = report.rows.find(r => r.businessLine === "total")!;
+    assert(total.current === 0, `expected zero revenue for an out-of-range month, got ${total.current}`);
+    assert(report.missing.current.some(m => /no recognized revenue/i.test(m)), `expected an explicit no-data message, got ${JSON.stringify(report.missing.current)}`);
+  });
 
   const { buildHourlyCurve } = await import("../packages/skills/growth-report/index");
   await t("growth-report: hourly curve buckets recognized rows by StartDateTime's hour (criterion #7)", () => {
@@ -358,7 +370,7 @@ async function main() {
 
   // 10 · knowledge/revenue: recognized-revenue round trip, business_line_map seeds itself,
   // alert dedupe never sends the same (location, line, day) twice (criterion #5)
-  const { replaceRecognizedRevenue, readRecognizedRevenue, listBusinessLineRules, tryRecordAlert } = await import("../packages/knowledge/revenue");
+  const { replaceRecognizedRevenue, readRecognizedRevenue, listBusinessLineRules, tryRecordAlert, listRecentAlerts } = await import("../packages/knowledge/revenue");
   await t("knowledge/revenue: replaceRecognizedRevenue/readRecognizedRevenue round-trips and replaces, never duplicates", async () => {
     await replaceRecognizedRevenue(testLocation, "2026-08-01", "2026-08-01", [rowsFor("2026-08-01", "Reservation", 15000)]);
     let rows = await readRecognizedRevenue(testLocation, "2026-08-01", "2026-08-01");
@@ -376,6 +388,11 @@ async function main() {
     const first = await tryRecordAlert({ locationSlug: testLocation, businessLine: "pickleball", sentOn: "2026-08-01", direction: "up", comparison: "prior_month", pct: 25, message: "test" });
     const second = await tryRecordAlert({ locationSlug: testLocation, businessLine: "pickleball", sentOn: "2026-08-01", direction: "up", comparison: "prior_month", pct: 25, message: "test" });
     assert(first === true && second === false, `expected [true, false], got [${first}, ${second}]`);
+  });
+  await t("knowledge/revenue: listRecentAlerts surfaces what tryRecordAlert wrote — the admin Alerts view's only evidence the Slack path fired (alerts)", async () => {
+    await tryRecordAlert({ locationSlug: testLocation, businessLine: "food_beverage", sentOn: "2026-08-02", direction: "down", comparison: "same_month_last_year", pct: -12, message: "listRecentAlerts-fixture" });
+    const recent = await listRecentAlerts(10);
+    assert(recent.some(a => a.message === "listRecentAlerts-fixture"), `expected the just-written alert to be readable back, got ${JSON.stringify(recent)}`);
   });
 
   // 10b · lib/format: spec section 8 is literal — "em dash for absent values (never $0.00)"

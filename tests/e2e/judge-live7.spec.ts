@@ -1,11 +1,11 @@
-import { test } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import fs from "fs";
 
 const creds = JSON.parse(fs.readFileSync("tests/e2e/judge-fixtures/admin-credentials.json", "utf-8"));
 const MGR_EMAIL = `judge-review-drill2-${Date.now()}@example.com`;
 const MGR_PASS = "reviewPass123!";
 
-async function loginAdmin(page) {
+async function loginAdmin(page: Page) {
   await page.goto("/admin/login");
   await page.locator('input[name="email"]').first().fill(creds.email);
   await page.locator('input[name="password"]').first().fill(creds.password);

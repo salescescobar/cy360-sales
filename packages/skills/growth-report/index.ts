@@ -287,6 +287,18 @@ export function computeGrowthReport(input: GrowthReportInput): GrowthReport {
   } else if (phase === "in_progress" && singleDay) {
     currentMissing.push("Today is still in progress — recognized revenue may still change before the day closes out.");
   }
+  // A period with nothing else to explain itself (not future, not in-progress, no missing
+  // source, no open GoTab day) but that still summed to zero across every business line
+  // (h_empty_state, e.g. a month far outside the 19 months of loaded data) would otherwise
+  // render as a silent all-em-dash table — indistinguishable from a real loading/rendering
+  // bug. Say so explicitly instead of letting the absence of a number stand for an explanation.
+  if (currentMissing.length === 0 && (rows.find(r => r.businessLine === "total")?.current ?? 0) === 0) {
+    currentMissing.push(
+      singleDay
+        ? "No recognized revenue found for this day — nothing from CourtReserve or GoTab matched this date."
+        : "No recognized revenue found for this period — nothing from CourtReserve or GoTab matched these dates.",
+    );
+  }
 
   const dayLabel = (n: number) => singleDay ? `the same day of the month` : `first ${n} day${n === 1 ? "" : "s"}`;
   return {

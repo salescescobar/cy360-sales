@@ -258,3 +258,24 @@ export async function tryRecordAlert(rec: AlertRecord): Promise<boolean> {
   writeLocalArray(ALERTS_PATH, [...existing, rec]);
   return true;
 }
+
+/** Read-only history behind the admin Alerts view — the only observable evidence (short of a
+ *  live Slack channel) that criterion #5's "pushed to Slack at most once per day per line"
+ *  path actually fires, since notifySlack() itself is fire-and-forget with no return value. */
+export async function listRecentAlerts(limit = 50): Promise<AlertRecord[]> {
+  if (supabaseConfigured()) {
+    try {
+      const res = await supabaseRest(`alerts_sent?order=sent_on.desc,created_at.desc&limit=${limit}`);
+      const data = (await res.json()) as Array<Record<string, unknown>>;
+      return data.map(d => ({
+        locationSlug: d.location_slug as string, businessLine: d.business_line as string, sentOn: d.sent_on as string,
+        direction: d.direction as "up" | "down", comparison: d.comparison as string, pct: d.pct as number, message: d.message as string,
+      }));
+    } catch (e) {
+      if (!(e instanceof SchemaNotMigratedError)) throw e;
+      warnSchemaNotMigrated();
+    }
+  }
+  const existing = readLocalArray<AlertRecord>(ALERTS_PATH);
+  return existing.sort((a, b) => (a.sentOn < b.sentOn ? 1 : -1)).slice(0, limit);
+}

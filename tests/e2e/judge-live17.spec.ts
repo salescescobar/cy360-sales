@@ -1,11 +1,11 @@
-import { test } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import fs from "fs";
 
 const creds = JSON.parse(fs.readFileSync("tests/e2e/judge-fixtures/admin-credentials.json", "utf-8"));
 const MGR_EMAIL = `judge-review-pii2-${Date.now()}@example.com`;
 const MGR_PASS = "reviewPass123!";
 
-async function loginMgr(page) {
+async function loginMgr(page: Page) {
   await page.goto("/admin/login");
   await page.locator('input[name="email"]').first().fill(creds.email);
   await page.locator('input[name="password"]').first().fill(creds.password);
@@ -26,7 +26,7 @@ async function loginMgr(page) {
   await page.waitForLoadState("networkidle");
 }
 
-async function fullyExpand(page, lineName) {
+async function fullyExpand(page: Page, lineName: string) {
   await page.goto("/dashboard/orlando?period=day&date=2026-08-01");
   await page.waitForLoadState("networkidle");
   for (let i = 0; i < 4; i++) {

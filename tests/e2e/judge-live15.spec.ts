@@ -28,7 +28,7 @@ test("10000-char date param settle time", async ({ page }) => {
 
   const longDate = "A".repeat(10000);
   const resp = await page.goto(`/dashboard/orlando?period=day&date=${longDate}`, { waitUntil: "domcontentloaded", timeout: 20000 }).catch((e) => ({ err: e.message }));
-  console.log("LONGDATE_STATUS", resp?.status ? resp.status() : JSON.stringify(resp));
+  console.log("LONGDATE_STATUS", (resp as any)?.status ? (resp as any).status() : JSON.stringify(resp));
   await page.waitForTimeout(6000);
   const body = await page.evaluate(() => document.body.innerText.slice(0, 500));
   console.log("LONGDATE_BODY_AFTER_6S:", body);

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { theme } from "../../lib/theme";
 import { fmtUsd } from "../../lib/format";
 
@@ -23,6 +23,12 @@ export default function BusinessLinesClient({ locations }: { locations: Array<{ 
   const [error, setError] = useState<string | null>(null);
   const [assigning, setAssigning] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [manualSource, setManualSource] = useState<"gotab" | "courtreserve">("courtreserve");
+  const [manualGroup, setManualGroup] = useState("");
+  const [manualItem, setManualItem] = useState("");
+  const [manualLine, setManualLine] = useState("");
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualStatus, setManualStatus] = useState<string | null>(null);
 
   function load() {
     if (!location || !month) return;
@@ -54,6 +60,33 @@ export default function BusinessLinesClient({ locations }: { locations: Array<{ 
       setStatus(`Couldn't assign: ${e}`);
     } finally {
       setAssigning(null);
+    }
+  }
+
+  async function submitManualRule(e: FormEvent) {
+    e.preventDefault();
+    setManualSaving(true);
+    setManualStatus(null);
+    try {
+      const res = await fetch("/api/admin/business-lines", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: manualSource,
+          matchGroup: manualGroup.trim() || null,
+          matchItem: manualItem.trim() || null,
+          businessLine: manualLine,
+          priority: 5,
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+      setManualStatus(`Rule added: ${manualSource}/${manualGroup || "any group"}/${manualItem || "any item"} → ${BUSINESS_LINE_LABELS[manualLine] ?? manualLine}.`);
+      setManualGroup(""); setManualItem(""); setManualLine("");
+      load();
+    } catch (e) {
+      setManualStatus(`Couldn't add rule: ${e}`);
+    } finally {
+      setManualSaving(false);
     }
   }
 
@@ -111,6 +144,41 @@ export default function BusinessLinesClient({ locations }: { locations: Array<{ 
           </tbody>
         </table>
       )}
+
+      <h2 style={{ fontSize: 16, marginTop: 24 }}>Add a mapping rule manually</h2>
+      <p style={{ color: theme.textSecondary, fontSize: 13 }}>
+        Detected unmapped items above come from this period&apos;s actual data — if nothing is
+        unmapped right now, that just means everything this period already matched a rule.
+        Criterion #4&apos;s write path (assign a source item to a business line) doesn&apos;t
+        have to wait for one: add the rule directly here, e.g. ahead of a source item you know
+        is coming, or to correct one already mapped to the wrong line.
+      </p>
+      {manualStatus && <p role="status">{manualStatus}</p>}
+      <form onSubmit={submitManualRule} style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 24 }}>
+        <label>
+          Source<br />
+          <select value={manualSource} onChange={e => setManualSource(e.target.value as "gotab" | "courtreserve")}>
+            <option value="courtreserve">courtreserve</option>
+            <option value="gotab">gotab</option>
+          </select>
+        </label>
+        <label>
+          Group (blank = any)<br />
+          <input value={manualGroup} onChange={e => setManualGroup(e.target.value)} placeholder="e.g. Package" />
+        </label>
+        <label>
+          Item (blank = any, %substring% allowed)<br />
+          <input value={manualItem} onChange={e => setManualItem(e.target.value)} placeholder="e.g. %birthday%" />
+        </label>
+        <label>
+          Business line<br />
+          <select value={manualLine} onChange={e => setManualLine(e.target.value)} required>
+            <option value="" disabled>Choose…</option>
+            {Object.entries(BUSINESS_LINE_LABELS).map(([slug, label]) => <option key={slug} value={slug}>{label}</option>)}
+          </select>
+        </label>
+        <button type="submit" disabled={manualSaving || !manualLine}>{manualSaving ? "Adding…" : "Add rule"}</button>
+      </form>
 
       <h2 style={{ fontSize: 16, marginTop: 24 }}>Current mapping rules</h2>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>

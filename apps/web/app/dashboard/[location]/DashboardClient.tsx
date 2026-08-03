@@ -54,21 +54,29 @@ function ComparisonCell({ amount, pct }: { amount: number; pct: number | null })
   );
 }
 
-function DrilldownRows({ groups }: { groups: DrilldownGroup[] }) {
-  const [openGroup, setOpenGroup] = useState<string | null>(null);
-  const [openItem, setOpenItem] = useState<string | null>(null);
+/** Controlled by the parent (not local state) so the expansion path survives a reload — the
+ *  parent mirrors openGroup/openItem into the URL alongside period/date/month. */
+function DrilldownRows({
+  groups, openGroup, openItem, onToggleGroup, onToggleItem,
+}: {
+  groups: DrilldownGroup[];
+  openGroup: string | null;
+  openItem: string | null;
+  onToggleGroup: (group: string) => void;
+  onToggleItem: (item: string) => void;
+}) {
   if (groups.length === 0) return <tr><td colSpan={4} style={{ padding: "8px 8px 8px 32px", color: theme.textSecondary, fontSize: 13 }}>No transactions this period.</td></tr>;
   return (
     <>
       {groups.map(g => (
         <Fragment key={g.group}>
-          <tr onClick={() => setOpenGroup(openGroup === g.group ? null : g.group)} style={{ cursor: "pointer", background: theme.surfaceMuted }}>
+          <tr onClick={() => onToggleGroup(g.group)} style={{ cursor: "pointer", background: theme.surfaceMuted }}>
             <td style={{ padding: "8px 8px 8px 32px", color: theme.textTertiary }}>{openGroup === g.group ? "▾" : "▸"} {g.group}</td>
             <td colSpan={3} style={{ textAlign: "right", padding: "8px 8px", color: theme.textTertiary, fontFeatureSettings: theme.numericFeatures }}>{fmtUsd(g.amountCents)}</td>
           </tr>
           {openGroup === g.group && g.items.map(it => (
             <Fragment key={it.item}>
-              <tr onClick={() => setOpenItem(openItem === it.item ? null : it.item)} style={{ cursor: "pointer" }}>
+              <tr onClick={() => onToggleItem(it.item)} style={{ cursor: "pointer" }}>
                 <td style={{ padding: "6px 8px 6px 56px", color: theme.textSecondary, fontSize: 13 }}>{openItem === it.item ? "▾" : "▸"} {it.item}</td>
                 <td colSpan={3} style={{ textAlign: "right", padding: "6px 8px", color: theme.textSecondary, fontSize: 13, fontFeatureSettings: theme.numericFeatures }}>{fmtUsd(it.amountCents)}</td>
               </tr>
@@ -93,6 +101,11 @@ export default function DashboardClient({ location }: { location: string }) {
   const [report, setReport] = useState<GrowthReport | null>(null);
   const [drilldown, setDrilldown] = useState<Record<string, DrilldownGroup[]>>({});
   const [openLine, setOpenLine] = useState<string | null>(null);
+  // Drill-down depth (line -> group -> item) lives in the URL alongside period/date/month
+  // (h_refresh_mid_flow) — otherwise a reload keeps the top-level view identical while
+  // silently collapsing every row back to the top, which reads as lost state, not a refresh.
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [openItem, setOpenItem] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -101,9 +114,15 @@ export default function DashboardClient({ location }: { location: string }) {
     const p = params.get("period");
     const d = params.get("date");
     const m = params.get("month");
+    const l = params.get("line");
+    const g = params.get("group");
+    const it = params.get("item");
     if (p === "month" || p === "day") setPeriod(p);
     if (d && DATE_RE.test(d)) setDate(d);
     if (m && MONTH_RE.test(m)) setMonth(m);
+    if (l) setOpenLine(l);
+    if (g) setOpenGroup(g);
+    if (it) setOpenItem(it);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -111,8 +130,11 @@ export default function DashboardClient({ location }: { location: string }) {
     const params = new URLSearchParams();
     params.set("period", period);
     if (period === "day") params.set("date", date); else params.set("month", month);
+    if (openLine) params.set("line", openLine);
+    if (openGroup) params.set("group", openGroup);
+    if (openItem) params.set("item", openItem);
     window.history.replaceState(null, "", `?${params.toString()}`);
-  }, [period, date, month]);
+  }, [period, date, month, openLine, openGroup, openItem]);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,7 +216,11 @@ export default function DashboardClient({ location }: { location: string }) {
                 return (
                   <Fragment key={row.businessLine}>
                     <tr
-                      onClick={clickable ? () => setOpenLine(openLine === row.businessLine ? null : row.businessLine) : undefined}
+                      onClick={clickable ? () => {
+                        setOpenLine(openLine === row.businessLine ? null : row.businessLine);
+                        setOpenGroup(null);
+                        setOpenItem(null);
+                      } : undefined}
                       style={{
                         cursor: clickable ? "pointer" : "default",
                         fontWeight: isGrossOrTotal ? 700 : 400,
@@ -208,7 +234,15 @@ export default function DashboardClient({ location }: { location: string }) {
                       <ComparisonCell amount={row.priorMonth} pct={row.vsPriorMonthPct} />
                       <ComparisonCell amount={row.lastYear} pct={row.vsLastYearPct} />
                     </tr>
-                    {openLine === row.businessLine && <DrilldownRows groups={drilldown[row.businessLine] ?? []} />}
+                    {openLine === row.businessLine && (
+                      <DrilldownRows
+                        groups={drilldown[row.businessLine] ?? []}
+                        openGroup={openGroup}
+                        openItem={openItem}
+                        onToggleGroup={group => { setOpenGroup(openGroup === group ? null : group); setOpenItem(null); }}
+                        onToggleItem={item => setOpenItem(openItem === item ? null : item)}
+                      />
+                    )}
                   </Fragment>
                 );
               })}
