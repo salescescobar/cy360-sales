@@ -60,6 +60,8 @@ test.describe("judge-final", () => {
     await page.goto("/import");
     await page.locator('input[type="file"]').setInputFiles("tests/e2e/judge-fixtures/gotab-2023-05-05.csv");
     await page.getByRole("button", { name: /preview/i }).click();
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(500);
     const bodyText1 = await page.locator("body").innerText();
     fs.appendFileSync("test-results/judge-final-summary.txt", `upload preview 1: ${bodyText1.replace(/\n/g, " | ")}\n`);
     expect(bodyText1).toContain("2023-05-05");
@@ -122,6 +124,8 @@ test.describe("judge-final", () => {
     await page.goto("/import");
     await page.locator('input[type="file"]').setInputFiles("tests/e2e/judge-fixtures/malformed.csv");
     await page.getByRole("button", { name: /preview/i }).click();
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(500);
     const text = await page.locator("body").innerText();
     fs.appendFileSync("test-results/judge-final-summary.txt", `bad file result: ${text.replace(/\n/g, " | ")}\n`);
     expect(text.toLowerCase()).toContain("unrecognized");
@@ -195,7 +199,13 @@ test.describe("judge-final", () => {
       fs.appendFileSync("test-results/judge-final-summary.txt", `hostile ${url.slice(0,60)}... -> status=${status} body=${bodySnippet}\n`);
     }
 
-    // 10MB file upload
+    // 10MB file upload — needs an admin session, not the manager session used above
+    await page.goto("/admin/login");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(pass);
+    await page.getByRole("button", { name: /sign in/i }).click();
+    await expect(page).toHaveURL(/\/admin\/managers$/);
+
     const big = Buffer.alloc(10 * 1024 * 1024, "a");
     fs.writeFileSync("tests/e2e/judge-fixtures/big.csv", "date,category,gross_amount,transaction_count\n" + big.toString());
     await page.goto("/import");
