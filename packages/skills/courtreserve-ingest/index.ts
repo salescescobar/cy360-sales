@@ -434,7 +434,11 @@ export async function fetchRevenueRecognitionRows(
 
 export type RecognizedRevenueRow = {
   locationSlug: string;
-  source: "courtreserve";
+  // revenue_recognized (verified live 2026-08-02+) holds both sources: CourtReserve rows
+  // written by mapRevenueRecognitionRows below, and GoTab rows written directly against the
+  // table outside this ingest path — resolveBusinessLine needs the row's real source to pick
+  // the right rule set (packages/skills/growth-report/index.ts).
+  source: "courtreserve" | "gotab";
   externalId: string; // FeeId::PaymentId::RelationId (falls back to a positional id when all three are absent)
   businessDate: string; // YYYY-MM-DD, date(StartDateTime) — service date, never payment date
   periodMonth: string; // YYYY-MM, derived from businessDate

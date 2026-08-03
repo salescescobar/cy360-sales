@@ -74,12 +74,49 @@ export const DEFAULT_BUSINESS_LINE_RULES: BusinessLineRule[] = [
   // above so a real category breakdown always wins over this catch-all; still admin-editable
   // via /admin/business-lines like any other rule (criterion #4).
   { source: "gotab", matchGroup: "uncategorized", matchItem: null, businessLine: "food_beverage", priority: 50 },
+
+  // recognized_revenue (verified live 2026-08-02+) also carries GoTab rows directly, in one
+  // of two grains depending on when/how the month was ingested — never both for the same
+  // month. "Categories" (e.g. 2026-07) is the exploded per-category grain: group_name is the
+  // literal string "Categories", item_name is the category itself (food/alcohol/beverage/
+  // swag/merchandise/arcade/sponsorship/events). "Business Lines" (older/other months) is
+  // pre-aggregated: group_name is the literal string "Business Lines", item_name is already
+  // the resolved business line's own key — an identity passthrough rule per line.
+  { source: "gotab", matchGroup: "Categories", matchItem: "food", businessLine: "food_beverage", priority: 10 },
+  { source: "gotab", matchGroup: "Categories", matchItem: "alcohol", businessLine: "food_beverage", priority: 10 },
+  { source: "gotab", matchGroup: "Categories", matchItem: "beverage", businessLine: "food_beverage", priority: 10 },
+  { source: "gotab", matchGroup: "Categories", matchItem: "swag", businessLine: "swag", priority: 10 },
+  { source: "gotab", matchGroup: "Categories", matchItem: "merchandise", businessLine: "swag", priority: 10 },
+  { source: "gotab", matchGroup: "Categories", matchItem: "arcade", businessLine: "arcade", priority: 10 },
+  { source: "gotab", matchGroup: "Categories", matchItem: "sponsorship", businessLine: "sponsorships", priority: 10 },
+  { source: "gotab", matchGroup: "Categories", matchItem: "events", businessLine: "events", priority: 10 },
+
+  { source: "gotab", matchGroup: "Business Lines", matchItem: "food_beverage", businessLine: "food_beverage", priority: 10 },
+  { source: "gotab", matchGroup: "Business Lines", matchItem: "pickleball", businessLine: "pickleball", priority: 10 },
+  { source: "gotab", matchGroup: "Business Lines", matchItem: "memberships", businessLine: "memberships", priority: 10 },
+  { source: "gotab", matchGroup: "Business Lines", matchItem: "events", businessLine: "events", priority: 10 },
+  { source: "gotab", matchGroup: "Business Lines", matchItem: "lessons", businessLine: "lessons", priority: 10 },
+  { source: "gotab", matchGroup: "Business Lines", matchItem: "swag", businessLine: "swag", priority: 10 },
+  { source: "gotab", matchGroup: "Business Lines", matchItem: "arcade", businessLine: "arcade", priority: 10 },
+  { source: "gotab", matchGroup: "Business Lines", matchItem: "sponsorships", businessLine: "sponsorships", priority: 10 },
+
+  // Catch-all (must never be hardcoded outside this data — criterion #1): a GoTab row that
+  // matches no group-specific rule above still resolves rather than piling up in Unmapped,
+  // same rationale as the "uncategorized" rule but expressed as the general case — any group,
+  // any item, lowest priority so every specific rule always wins first.
+  { source: "gotab", matchGroup: null, matchItem: "%", businessLine: "food_beverage", priority: 100 },
 ];
 
-/** ILIKE-style match: `%foo%` = substring, otherwise exact — both case-insensitive. Trims
- *  surrounding whitespace on both sides so a stray leading/trailing space in a live source
- *  field (seen in real CourtReserve item names, e.g. trailing spaces on event titles) never
- *  silently defeats an otherwise-correct exact match. */
+/** SQL `=` semantics for match_group: exact, case-sensitive, trimmed only to tolerate a stray
+ *  leading/trailing space in a live source field (seen in real CourtReserve group names) —
+ *  never a substring/pattern match. `null` means "matches any group". */
+function groupEquals(pattern: string, value: string): boolean {
+  return pattern.trim() === value.trim();
+}
+
+/** ILIKE-style match for match_item: `%foo%` = substring, `foo%`/`%foo` = prefix/suffix,
+ *  otherwise exact — all case-insensitive, trimmed on both sides. `null` means "matches any
+ *  item in the group". */
 function ilikeMatches(pattern: string, value: string): boolean {
   const p = pattern.trim().toLowerCase();
   const v = value.trim().toLowerCase();
@@ -90,9 +127,14 @@ function ilikeMatches(pattern: string, value: string): boolean {
 }
 
 /**
- * Resolves one (source, group, item) triple against the rule set, most specific/highest
- * priority match wins. Rules are evaluated lowest-`priority`-number first; the first rule
- * whose matchGroup AND (matchItem or null) both match decides the line.
+ * Resolves one (source, group, item) triple against the rule set — exactly the SQL semantic:
+ *   select business_line from business_line_map m
+ *   where m.source = :source
+ *     and (m.match_group is null or m.match_group = :group)
+ *     and (m.match_item  is null or :item ILIKE m.match_item)
+ *   order by m.priority limit 1
+ * Lowest `priority` number wins, so a catch-all rule (matchGroup/matchItem both null-ish,
+ * e.g. matchItem: "%") only ever fires once nothing more specific has matched.
  */
 export function resolveBusinessLine(
   rules: BusinessLineRule[],
@@ -102,7 +144,7 @@ export function resolveBusinessLine(
 ): BusinessLine | typeof UNMAPPED {
   const candidates = rules
     .filter(r => r.source === source
-      && (r.matchGroup == null || ilikeMatches(r.matchGroup, group))
+      && (r.matchGroup == null || groupEquals(r.matchGroup, group))
       && (r.matchItem == null || ilikeMatches(r.matchItem, item)))
     .sort((a, b) => a.priority - b.priority);
   return candidates.length > 0 ? candidates[0].businessLine : UNMAPPED;

@@ -146,7 +146,7 @@ export async function readRecognizedRevenue(locationSlug: string, fromDate: stri
       return data.map(d => {
         const raw = (d.raw as Record<string, unknown>) ?? {};
         return {
-          locationSlug: d.location_slug as string, source: "courtreserve" as const, externalId: "",
+          locationSlug: d.location_slug as string, source: d.source as "courtreserve" | "gotab", externalId: "",
           businessDate: d.business_date as string, periodMonth: (d.period_month as string).slice(0, 7), groupName: d.group_name as string,
           itemName: d.item_name as string, amountCents: d.amount_cents as number, taxCents: d.tax_cents as number,
           netCents: d.net_cents as number, transactionType: (raw.TransactionType as string | null) ?? null,

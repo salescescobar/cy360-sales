@@ -364,6 +364,79 @@ async function main() {
     assert(curve[1].hour === 14 && curve[1].amountCents === 3000, JSON.stringify(curve[1]));
   });
 
+  // 8b · business-line mapping resolution: exact SQL semantic (equality match_group, ILIKE
+  // match_item, NULL = wildcard both sides, lowest priority wins) plus GoTab's two
+  // recognized-revenue grains ("Categories" exploded, "Business Lines" pre-aggregated),
+  // verified against the real 2026-07 Orlando numbers.
+  const recRow = (source: "courtreserve" | "gotab", date: string, groupName: string, itemName: string, amountCents: number) => ({
+    locationSlug: "orlando", source, externalId: `${source}-${date}-${groupName}-${itemName}-${amountCents}`,
+    businessDate: date, periodMonth: date.slice(0, 7), groupName, itemName,
+    amountCents, taxCents: 0, netCents: amountCents, transactionType: null, paymentType: null,
+    feeId: null, paymentId: null, relationId: null, recognizedOn: date, raw: {},
+  });
+  await t("business-lines: GoTab's pre-aggregated 'Business Lines' grain resolves each line via identity passthrough", () => {
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "gotab", "Business Lines", "food_beverage") === "food_beverage", "food_beverage passthrough");
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "gotab", "Business Lines", "arcade") === "arcade", "arcade passthrough");
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "gotab", "Business Lines", "sponsorships") === "sponsorships", "sponsorships passthrough");
+  });
+  await t("business-lines: match_group is exact equality, never a substring — an unmatched group falls through to the catch-all instead of fuzzily matching 'Categories'", () => {
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "gotab", "Category", "food") === "food_beverage", "falls through to catch-all, not a fuzzy 'Categories' match");
+  });
+  await t("growth-report: a date already covered by a recognized-revenue GoTab row must not also double-count the legacy daily_sales breakdown for that same date", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 1, currentPhase: "complete",
+      current: {
+        label: "2026-07",
+        courtRows: [recRow("gotab", "2026-07-01", "Categories", "food", 5000)],
+        gotabDays: [{ date: "2026-07-01", status: "complete", breakdown: { food: 999999 } }],
+        courtreserveOk: true,
+      },
+      priorMonth: { label: "2026-06", courtRows: [], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-07", courtRows: [], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2026-07-01",
+    });
+    const fb = report.rows.find(r => r.businessLine === "food_beverage")!;
+    assert(fb.current === 5000, `expected the recognized-revenue row counted exactly once (5000) — the legacy breakdown for the same date must be skipped, got ${fb.current}`);
+  });
+  await t("growth-report: verified 2026-07 Orlando totals resolve exactly — GoTab 'Categories' grain (many rows) + CourtReserve recognized revenue, unmapped surfaced, never dropped", () => {
+    const courtRows = [
+      recRow("courtreserve", "2026-07-05", "Membership Fee", "Annual Membership", 1_773_300),
+      recRow("courtreserve", "2026-07-06", "Reservation", "Court Booking", 5_000_000),
+      recRow("courtreserve", "2026-07-07", "Guest Fees - Reservations", "Guest Drop-in", 1_817_097),
+      recRow("courtreserve", "2026-07-08", "Event Registration", "Fall Tournament", 3_208_727),
+      recRow("courtreserve", "2026-07-09", "Lesson", "Private Lesson", 734_900),
+      recRow("courtreserve", "2026-07-10", "Pro Shop Rental", "Racquet Rental", 4_800), // no rule matches -> unmapped
+      // GoTab's "Categories" grain for 2026-07 — group_name is literally "Categories",
+      // item_name is the category. Real production has ~60 rows across the month; abbreviated
+      // here to one row per category since resolution is per-row and sums linearly.
+      recRow("gotab", "2026-07-01", "Categories", "food", 3_000_000),
+      recRow("gotab", "2026-07-02", "Categories", "alcohol", 2_500_000),
+      recRow("gotab", "2026-07-03", "Categories", "beverage", 1_239_930),
+      recRow("gotab", "2026-07-11", "Categories", "events", 8_611_338),
+      recRow("gotab", "2026-07-12", "Categories", "swag", 673_325),
+      recRow("gotab", "2026-07-13", "Categories", "arcade", 32_000),
+      recRow("gotab", "2026-07-14", "Categories", "sponsorship", 6_745),
+    ];
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 31, currentPhase: "complete",
+      current: { label: "2026-07", courtRows, gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2026-06", courtRows: [], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-07", courtRows: [], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2026-07-31",
+    });
+    const line = (bl: string) => report.rows.find(r => r.businessLine === bl)!.current;
+    assert(line("food_beverage") === 6_739_930, `food_beverage: expected 6739930 ($67,399.30), got ${line("food_beverage")}`);
+    assert(line("events") === 11_820_065, `events: expected 11820065 = gotab 8611338 + courtreserve 3208727 ($118,200.65), got ${line("events")}`);
+    assert(line("pickleball") === 6_817_097, `pickleball: expected 6817097 ($68,170.97), got ${line("pickleball")}`);
+    assert(line("memberships") === 1_773_300, `memberships: expected 1773300 ($17,733.00), got ${line("memberships")}`);
+    assert(line("lessons") === 734_900, `lessons: expected 734900 ($7,349.00), got ${line("lessons")}`);
+    assert(line("swag") === 673_325, `swag: expected 673325 ($6,733.25), got ${line("swag")}`);
+    assert(line("arcade") === 32_000, `arcade: expected 32000 ($320.00), got ${line("arcade")}`);
+    assert(line("unmapped") === 4_800, `unmapped: expected 4800 ($48.00), got ${line("unmapped")}`);
+    const total = report.rows.find(r => r.businessLine === "total")!.current;
+    assert(total === 28_602_162, `total: expected 28602162 ($286,021.62), got ${total}`);
+  });
+
   // 9 · reconciliation: recognized vs payment-basis per FeeCategory/TransactionType, with delta (spec section 4)
   const { computeReconciliation, groupByFeeCategory, computeDrivers } = await import("../packages/skills/reconciliation/index");
   await t("reconciliation: groups by FeeCategory + TransactionType and computes the delta without picking a winner", () => {

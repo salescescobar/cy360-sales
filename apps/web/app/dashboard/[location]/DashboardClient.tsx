@@ -34,6 +34,14 @@ function yesterdayIso(): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** The report must open on the CURRENT calendar month, not whatever month "yesterday"
+ *  happens to fall in — those only differ on the 1st, but that's exactly the day a stale
+ *  month default is most misleading (h_wrong_default_month). */
+function currentMonthIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_RE = /^\d{4}-\d{2}$/;
 const ROLLUP_LINES = new Set(["gross_revenues", "discounts", "total"]);
@@ -112,9 +120,9 @@ function DrilldownRows({
 }
 
 export default function DashboardClient({ location }: { location: string }) {
-  const [period, setPeriod] = useState<"day" | "month">("day");
+  const [period, setPeriod] = useState<"day" | "month">("month");
   const [date, setDate] = useState(yesterdayIso());
-  const [month, setMonth] = useState(yesterdayIso().slice(0, 7));
+  const [month, setMonth] = useState(currentMonthIso());
   const [report, setReport] = useState<GrowthReport | null>(null);
   const [dataQuality, setDataQuality] = useState<DataQualityInfo | null>(null);
   const [drilldown, setDrilldown] = useState<Record<string, DrilldownGroup[]>>({});

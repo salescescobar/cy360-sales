@@ -96,16 +96,23 @@ function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: Busine
 
   for (const row of period.courtRows) {
     if (excluded(row.businessDate)) continue;
-    const line = resolveBusinessLine(rules, "courtreserve", row.groupName, row.itemName);
+    const line = resolveBusinessLine(rules, row.source, row.groupName, row.itemName);
     bump(line, row.amountCents);
   }
 
   const missing: string[] = [];
   if (!period.courtreserveOk) missing.push("CourtReserve: API call failed for this period — excluded from totals");
 
+  // recognized_revenue can already carry a day's GoTab revenue directly (either grain — see
+  // business-lines/index.ts) via courtRows above. The older daily_sales breakdown (gotabDays)
+  // must never ALSO be summed for a date that's already covered that way, or the day's
+  // revenue would be counted twice across the two grains.
+  const gotabRecognizedDates = new Set(period.courtRows.filter(r => r.source === "gotab").map(r => r.businessDate));
+
   const missingGotabDates: string[] = [];
   for (const day of period.gotabDays) {
     if (excluded(day.date)) continue;
+    if (gotabRecognizedDates.has(day.date)) continue;
     if (day.status !== "complete") { missingGotabDates.push(day.date); continue; }
     for (const [category, cents] of Object.entries(day.breakdown)) {
       const line = resolveBusinessLine(rules, "gotab", category, category);
@@ -212,11 +219,14 @@ export function buildDrilldown(period: PeriodInput, elapsedDays: number, rules: 
 
   for (const row of period.courtRows) {
     if (excluded(row.businessDate)) continue;
-    const line = resolveBusinessLine(rules, "courtreserve", row.groupName, row.itemName);
-    record(line, row.groupName, row.itemName, { date: row.businessDate, amountCents: row.amountCents, source: "courtreserve", transactionType: row.transactionType, paymentType: row.paymentType });
+    const line = resolveBusinessLine(rules, row.source, row.groupName, row.itemName);
+    record(line, row.groupName, row.itemName, { date: row.businessDate, amountCents: row.amountCents, source: row.source, transactionType: row.transactionType, paymentType: row.paymentType });
   }
+  // Same double-count guard as summarizePeriod above — a date already covered by a
+  // recognized-revenue GoTab row must not also pull in the legacy daily_sales breakdown.
+  const gotabRecognizedDates = new Set(period.courtRows.filter(r => r.source === "gotab").map(r => r.businessDate));
   for (const day of period.gotabDays) {
-    if (excluded(day.date) || day.status !== "complete") continue;
+    if (excluded(day.date) || day.status !== "complete" || gotabRecognizedDates.has(day.date)) continue;
     for (const [category, cents] of Object.entries(day.breakdown)) {
       const line = resolveBusinessLine(rules, "gotab", category, category);
       record(line, category, category, { date: day.date, amountCents: cents, source: "gotab" });
