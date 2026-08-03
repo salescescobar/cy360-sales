@@ -526,7 +526,11 @@ export async function ingestRecognizedRevenue(
 ): Promise<RecognizedRevenueRow[]> {
   const fetcher = opts.fetchRows ?? ((s: string, e: string) => fetchRevenueRecognitionRows(s, e, opts.creds));
   const rawRows = await fetcher(startDate, endDate);
-  return mapRevenueRecognitionRows(rawRows, locationSlug, cfg);
+  // Same boundary looseness as salessummarydetailed (verified live 2026-08-02) — a row right
+  // at the edge of the window can come back from both this range's fetch and the neighboring
+  // one's, and replaceRecognizedRevenue only deletes [startDate, endDate] before inserting.
+  const inRange = (date: string) => date >= startDate && date <= endDate;
+  return mapRevenueRecognitionRows(rawRows, locationSlug, cfg).filter(r => inRange(r.businessDate));
 }
 
 /**
