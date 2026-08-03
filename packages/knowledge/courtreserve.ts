@@ -106,9 +106,14 @@ export async function replaceCourtReserveDetail(
         });
       }
       if (detail.reservations.length) {
-        await supabaseRest("court_reservations", {
+        // Upsert, not a raw insert: a reservation can be returned by more than one month's
+        // fetch (a fee paid right at the boundary lands its business_date in one month or
+        // the neighboring one depending on when the API is queried — verified live
+        // 2026-08-02), so the SAME reservation_id can already exist from a previous run
+        // covering the other month. A plain insert 409s on that; upsert just replaces it.
+        await supabaseRest("court_reservations?on_conflict=location_slug,reservation_id", {
           method: "POST",
-          headers: { Prefer: "return=minimal" },
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
           body: JSON.stringify(detail.reservations.map(r => ({
             location_slug: r.locationSlug, reservation_id: r.reservationId, court_name: r.courtName,
             court_type: r.courtType, starts_at: r.startsAt, ends_at: r.endsAt, duration_minutes: r.durationMinutes,

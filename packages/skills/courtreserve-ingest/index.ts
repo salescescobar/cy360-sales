@@ -398,7 +398,7 @@ export const RevenueRecognitionRow = z.object({
   TaxTotal: z.number(),
   Total: z.number(),
   PaymentType: z.string().nullish(),
-  StartDateTime: z.string(),
+  StartDateTime: z.string().nullish(),
   EndDateTime: z.string().nullish(),
   PaidDate: z.string().nullish(),
   OrganizationMemberId: z.union([z.string(), z.number()]).nullish(),
@@ -479,8 +479,16 @@ export function mapRevenueRecognitionRows(
       seenPackagePairs.add(key);
     }
 
+    // StartDateTime (the service date) is occasionally null on the live API — falls back to
+    // PaidDate rather than crash; a row with neither is dropped (never fabricate a service
+    // date) and logged so it's visible, not silently missing revenue.
+    const serviceDate = row.StartDateTime ?? row.PaidDate;
+    if (serviceDate == null) {
+      console.error(`⚠ courtreserve-ingest: dropped a revenuerecognition row with no StartDateTime or PaidDate (FeeId=${row.FeeId ?? "?"})`);
+      return;
+    }
     const { MemberFirstName, MemberLastName, ...raw } = row;
-    const businessDate = row.StartDateTime.slice(0, 10);
+    const businessDate = serviceDate.slice(0, 10);
     const externalId = row.FeeId != null || row.PaymentId != null || row.RelationId != null
       ? `${row.FeeId ?? ""}::${row.PaymentId ?? ""}::${row.RelationId ?? ""}`
       : `pos::${i}::${businessDate}`;
