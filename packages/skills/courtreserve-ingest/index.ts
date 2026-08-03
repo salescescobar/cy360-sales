@@ -267,14 +267,17 @@ const toCentsFromAmount = (n: number) => Math.round(n * 100);
 /** THE SYSTEM SHALL NEVER store MemberFullName or FamilyName — drop them before persisting.
  *  OrgMemberId/OrgMemberFamilyId are opaque ids and may be kept. `externalId` carries a
  *  `#<occurrence>` suffix (verified against the live table's existing rows 2026-08-02) since
- *  a single TransactionId can appear on more than one DetailedRow. */
+ *  a single TransactionId can appear on more than one DetailedRow; the occurrence count is
+ *  keyed on (TransactionId, ItemName) — the same pair the live unique constraint covers
+ *  alongside external_id — so two rows only need disambiguating when they'd otherwise collide. */
 export function mapDetailedRowsToTransactions(rows: CourtReserveDetailedRow[], locationSlug: string): SalesTransactionRow[] {
   const occurrence = new Map<string, number>();
   return rows.map(row => {
     const { MemberFullName, FamilyName, ...raw } = row;
     const id = String(row.TransactionId);
-    const idx = occurrence.get(id) ?? 0;
-    occurrence.set(id, idx + 1);
+    const dedupeKey = `${id}::${row.ItemName}`;
+    const idx = occurrence.get(dedupeKey) ?? 0;
+    occurrence.set(dedupeKey, idx + 1);
     return {
       locationSlug,
       source: "courtreserve" as const,
@@ -367,8 +370,15 @@ export async function ingestCourtReserveDetail(
 ): Promise<{ transactions: SalesTransactionRow[]; reservations: CourtReservationRow[]; paymentTypeTotals: PaymentTypeTotalRow[] }> {
   const fetcher = opts.fetchDetailedRows ?? ((s: string, e: string) => fetchCourtReserveDetailedRows(s, e, opts.creds));
   const rawRows = await fetcher(startDate, endDate);
-  const transactions = mapDetailedRowsToTransactions(rawRows, locationSlug);
-  const reservations = mapDetailedRowsToReservations(rawRows, locationSlug);
+  // The live API's paymentStartDate/paymentEndDate filter isn't a hard boundary — a row
+  // paid right at the edge of the window can come back from both this month's fetch and
+  // the neighboring month's (verified live 2026-08-02: TransactionId 49151068, PaidDate
+  // 2025-02-01, returned by a 2025-01-01..2025-01-31 fetch too). Since replaceCourtReserveDetail
+  // only deletes [startDate, endDate] before inserting, an out-of-range row here would
+  // collide with the row the neighboring month's ingestion already stored — drop it instead.
+  const inRange = (date: string) => date >= startDate && date <= endDate;
+  const transactions = mapDetailedRowsToTransactions(rawRows, locationSlug).filter(t => inRange(t.businessDate));
+  const reservations = mapDetailedRowsToReservations(rawRows, locationSlug).filter(r => inRange(r.businessDate));
   const paymentTypeTotals = aggregatePaymentTypeTotals(transactions, locationSlug);
   return { transactions, reservations, paymentTypeTotals };
 }
