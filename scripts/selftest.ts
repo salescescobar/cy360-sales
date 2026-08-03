@@ -365,7 +365,7 @@ async function main() {
   });
 
   // 9 · reconciliation: recognized vs payment-basis per FeeCategory/TransactionType, with delta (spec section 4)
-  const { computeReconciliation } = await import("../packages/skills/reconciliation/index");
+  const { computeReconciliation, groupByFeeCategory, computeDrivers } = await import("../packages/skills/reconciliation/index");
   await t("reconciliation: groups by FeeCategory + TransactionType and computes the delta without picking a winner", () => {
     const recognized = [rowsFor("2026-08-01", "Reservation", 15000)];
     const paymentBasis = [{
@@ -377,6 +377,28 @@ async function main() {
     const rows = computeReconciliation(recognized, paymentBasis);
     assert(rows.length === 1, JSON.stringify(rows));
     assert(rows[0].recognizedCents === 15000 && rows[0].paymentBasisCents === 10000 && rows[0].deltaCents === 5000, JSON.stringify(rows[0]));
+  });
+  await t("reconciliation: groupByFeeCategory subtotals every transaction type under its FeeCategory (spec item 2: grouped, not a flat matrix)", () => {
+    const rows = [
+      { feeCategory: "Membership Fee", transactionType: "card", recognizedCents: 10000, recognizedTaxCents: 0, paymentBasisCents: 10000, paymentBasisTaxCents: 0, deltaCents: 0 },
+      { feeCategory: "Membership Fee", transactionType: "ach", recognizedCents: 5000, recognizedTaxCents: 0, paymentBasisCents: 0, paymentBasisTaxCents: 0, deltaCents: 5000 },
+      { feeCategory: "Refunds", transactionType: "unknown", recognizedCents: 0, recognizedTaxCents: 0, paymentBasisCents: -107548, paymentBasisTaxCents: 0, deltaCents: 107548 },
+    ];
+    const groups = groupByFeeCategory(rows);
+    assert(groups.length === 2, JSON.stringify(groups));
+    const membership = groups.find(g => g.feeCategory === "Membership Fee")!;
+    assert(membership.recognizedCents === 15000 && membership.rows.length === 2, JSON.stringify(membership));
+  });
+  await t("reconciliation: computeDrivers explains payment-only and multi-transaction-type categories from the data, capped at 5 (spec item 2's plain-English drivers)", () => {
+    const rows = [
+      { feeCategory: "Refunds", transactionType: "unknown", recognizedCents: 0, recognizedTaxCents: 0, paymentBasisCents: -107548, paymentBasisTaxCents: 0, deltaCents: 107548 },
+      { feeCategory: "Membership Fee", transactionType: "card", recognizedCents: 10000, recognizedTaxCents: 0, paymentBasisCents: 10000, paymentBasisTaxCents: 0, deltaCents: 0 },
+      { feeCategory: "Membership Fee", transactionType: "ach", recognizedCents: 5000, recognizedTaxCents: 0, paymentBasisCents: 0, paymentBasisTaxCents: 0, deltaCents: 5000 },
+    ];
+    const drivers = computeDrivers(rows);
+    assert(drivers.length <= 5, JSON.stringify(drivers));
+    assert(drivers.some(d => d.kind === "only_payment_basis" && d.feeCategory === "Refunds" && d.amountCents === -107548), JSON.stringify(drivers));
+    assert(drivers.some(d => d.kind === "multi_transaction_type" && d.feeCategory === "Membership Fee" && d.transactionTypes?.length === 2), JSON.stringify(drivers));
   });
 
   // 10 · knowledge/revenue: recognized-revenue round trip, business_line_map seeds itself,
