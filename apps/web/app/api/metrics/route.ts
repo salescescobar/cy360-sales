@@ -67,7 +67,11 @@ export async function GET(req: NextRequest) {
     const priorDaysMap = await readMonth(location, priorMonth);
     const priorDays = [...priorDaysMap.entries()].map(([d, rows]) => toDailyMetrics(d, rows));
 
-    return NextResponse.json(aggregateMonthly(value, days, priorDays));
+    // Criterion #5: only compare like-for-like when VALUE is the current, still-in-progress
+    // month — a fully past month gets a normal full-month-vs-full-month comparison.
+    const elapsedDays = value === today.slice(0, 7) ? Number(today.slice(8, 10)) : undefined;
+
+    return NextResponse.json(aggregateMonthly(value, days, { month: priorMonth, days: priorDays }, { elapsedDays }));
   } catch {
     // Never surface a raw stack trace to the dashboard — the client shows this as an alert.
     return NextResponse.json({ error: "couldn't load metrics — try again shortly" }, { status: 500 });

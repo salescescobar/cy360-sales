@@ -1,17 +1,17 @@
-export const metadata = { title: "Sign in — CY360 Sales" };
+export const metadata = { title: "Admin sign in — CY360 Sales" };
 
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_credentials: "Incorrect email or password.",
 };
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+export default async function AdminLoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { error } = await searchParams;
   return (
     <main>
-      <h1>CY360 Sales</h1>
-      <p>Sign in to your location&apos;s dashboard.</p>
+      <h1>CY360 Sales — Admin</h1>
+      <p>Sign in to manage locations, uploads and manager accounts.</p>
       {error && <p role="alert">{ERROR_MESSAGES[error] ?? "Couldn't sign you in — try again."}</p>}
-      <form method="POST" action="/api/login">
+      <form method="POST" action="/api/admin/login">
         <label style={{ display: "block", margin: "8px 0" }}>
           Email
           <br />
@@ -24,10 +24,6 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         </label>
         <button type="submit">Sign in</button>
       </form>
-      <p>
-        Don&apos;t have credentials? Ask your admin to create your account — there is no
-        self-service signup.
-      </p>
     </main>
   );
 }

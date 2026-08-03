@@ -86,4 +86,4 @@ refresh:
   backfill_months: 12
 sources:
   gotab:        { enabled: true, mode: upload }   # csv now, api when the key arrives
-  courtreserve: { enabled: true, mode: upload, locations: [orlando] }
+  courtreserve: { enabled: true, mode: api, org_id: 13523, locations: [orlando] }

@@ -212,3 +212,56 @@ export async function readTraces(locationSlug?: string): Promise<RefreshTrace[]>
   const traces = readFileSync(TRACE_FILE, "utf8").trim().split("\n").filter(Boolean).map(l => JSON.parse(l) as RefreshTrace);
   return locationSlug ? traces.filter(t => t.locationSlug === locationSlug) : traces;
 }
+
+/**
+ * Recompute a day's complete/incomplete status from whatever is actually in the warehouse
+ * and write the trace row (criterion #2: "write one trace row per (location, date)
+ * recording which sources are present"; invariant #4: never accept an upload without one).
+ * Called after a confirmed import writes its rows — reads back both sources so a GoTab
+ * upload doesn't overwrite the trace as if CourtReserve had also just gone missing.
+ */
+export async function traceImportedDay(locationSlug: string, date: string): Promise<RefreshTrace> {
+  const rows = await readDay(locationSlug, date);
+  const gotabStatus: RefreshStatus = rows.some(r => r.source === "gotab") ? "loaded" : "missing";
+  const courtreserveStatus: RefreshStatus = rows.some(r => r.source === "courtreserve") ? "loaded" : "missing";
+  const status: "complete" | "incomplete" = gotabStatus === "loaded" && courtreserveStatus === "loaded" ? "complete" : "incomplete";
+  const trace: RefreshTrace = { locationSlug, date, at: new Date().toISOString(), gotabStatus, courtreserveStatus, status };
+  await traceRefresh(trace);
+  return trace;
+}
+
+export type ImportUploadRecord = {
+  locationSlug: string;
+  source: "gotab" | "courtreserve";
+  date: string;
+  storagePath: string;
+  originalFilename: string;
+  uploadedBy?: string;
+};
+
+const IMPORTS_TRACE_FILE = join(LOCAL_DIR, "import_uploads.jsonl");
+
+/** Raw-file audit trail row (criterion #2's other half — the trace row is traceImportedDay
+ *  above; this is the pointer to the raw copy in Supabase Storage bucket `imports`). */
+export async function recordImportUpload(rec: ImportUploadRecord): Promise<void> {
+  if (supabaseConfigured()) {
+    try {
+      await supabaseRest("import_uploads", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          location_slug: rec.locationSlug, source: rec.source, date: rec.date,
+          storage_path: rec.storagePath, original_filename: rec.originalFilename,
+          uploaded_by: rec.uploadedBy ?? null,
+        }),
+      });
+      return;
+    } catch (e) {
+      if (!(e instanceof SchemaNotMigratedError)) throw e;
+      warnSchemaNotMigrated();
+    }
+  }
+  requireLocalFallbackAllowed("recordImportUpload");
+  mkdirSync(LOCAL_DIR, { recursive: true });
+  appendFileSync(IMPORTS_TRACE_FILE, JSON.stringify({ ...rec, uploadedAt: new Date().toISOString() }) + "\n");
+}

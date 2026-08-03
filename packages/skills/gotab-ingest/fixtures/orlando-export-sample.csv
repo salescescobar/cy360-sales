@@ -1,0 +1,5 @@
+date,category,gross_amount,transaction_count
+2026-07-01,food,842.50,120
+2026-07-01,alcohol,610.00,45
+2026-07-02,food,415.25,60
+2026-07-02,beverage,120.00,20

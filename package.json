@@ -19,6 +19,7 @@
     "backfill": "tsx scripts/backfill.ts",
     "refresh:gotab": "tsx scripts/gotab-refresh.ts",
     "seed:fixtures": "tsx scripts/seed-fixtures.ts",
+    "seed:admin": "tsx scripts/seed-admin.ts",
     "cost:report": "tsx scripts/cost-report.ts",
     "selftest": "tsx scripts/selftest.ts",
     "models:check": "tsx scripts/check-models.ts"

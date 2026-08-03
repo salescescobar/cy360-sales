@@ -9,8 +9,10 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { repoPath } from "../../../../packages/core/paths";
 
 export type Session = { managerId: string; locationSlug: string };
+export type AdminSession = { adminId: string };
 
 const COOKIE_NAME = "manager_session";
+const ADMIN_COOKIE_NAME = "admin_session";
 const SECRET_FILE = repoPath(".local-storage", "session-secret");
 
 let warnedGeneratedSecret = false;
@@ -72,3 +74,29 @@ export function verifySession(token: string | undefined): Session | null {
 }
 
 export const SESSION_COOKIE_NAME = COOKIE_NAME;
+
+export function signAdminSession(session: AdminSession): string {
+  const payload = Buffer.from(JSON.stringify(session), "utf8").toString("base64url");
+  return `${payload}.${sign(payload)}`;
+}
+
+export function verifyAdminSession(token: string | undefined): AdminSession | null {
+  if (!token) return null;
+  const dot = token.lastIndexOf(".");
+  if (dot < 0) return null;
+  const payload = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = sign(payload);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (typeof parsed.adminId === "string") return parsed as AdminSession;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export const ADMIN_SESSION_COOKIE_NAME = ADMIN_COOKIE_NAME;

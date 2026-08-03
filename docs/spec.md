@@ -70,3 +70,36 @@ mobile app · Nashville / Mt. Pleasant ingestion (config-ready only).
 Warehouse tables + RLS already exist in Supabase (locations, manager_locations, daily_sales,
 refresh_runs, managers). Storage buckets `imports` and `clips` exist. Two real GoTab days
 (2026-08-01, 2026-08-02) are already loaded and must survive.
+
+## 10. CourtReserve API — VERIFIED CONTRACT (do not re-derive; tested live 2026-08-02)
+Auth: HTTP Basic. Username `COURTRESERVE_API_USER` (e.g. Org_13523_3), password
+`COURTRESERVE_API_PASS`, org id `COURTRESERVE_ORG_ID` = 13523 ("Crush Yard - Orlando, FL").
+Base: https://api.courtreserve.com · dates accepted as YYYY-MM-DD.
+
+Endpoints in use:
+- GET /api/v1/transactions/salessummarydetailed?paymentStartDate=&paymentEndDate=
+  Returns { ErrorMessage, Data: { Start, End, OrganizationId, OrganizationName,
+  DetailedRows: [...] } }. Each DetailedRow carries: FeeCategoryName, ItemName,
+  RevenueCategoryName, RevenueCategoryId, GLCode, Amount, AmountWithNoTax, TaxTotal,
+  OrgMemberId, OrgMemberFamilyId, MemberFullName, MembershipName, Start, End, CourtLabels,
+  CourtIds, ReservationId, InstructorNames, PaymentType, TransactionType, TransactionId,
+  TransactionDate, PaidDate, FamilyName, ItemCost.
+- GET /api/v1/transactions/list — transaction-level with filters (transactionStartDate,
+  transactionEndDate, paymentTypes, revenueCategoryIds, transactionTypes, ...)
+- GET /api/v1/reservationreport/listactive and /courtutilization — reservations & utilization
+
+THE SYSTEM SHALL map each DetailedRow into sales_transactions with:
+external_id = TransactionId · business_date = date(PaidDate) (revenue recognized when paid) ·
+occurred_at = PaidDate · category = FeeCategoryName · item_name = ItemName ·
+gross_cents = round(Amount*100) · tax_cents = round(TaxTotal*100) ·
+net_cents = round(AmountWithNoTax*100) · payment_type = PaymentType ·
+staff_name = InstructorNames · raw = the row MINUS the PII fields below.
+It SHALL also upsert court_reservations from ReservationId + CourtLabels + Start/End, and
+payment_type_totals per (date, PaymentType).
+
+THE SYSTEM SHALL NEVER store MemberFullName or FamilyName — drop them before persisting.
+OrgMemberId and OrgMemberFamilyId are opaque ids and may be kept.
+
+THE SYSTEM SHALL provide `npm run backfill:courtreserve -- --from=2025-01-01 --to=<today>`
+which pages the range month by month, is idempotent (re-running replaces, never duplicates),
+prints per-month row counts, and writes one `imports` audit row per month processed.

@@ -144,3 +144,20 @@ export async function findManagerById(id: string): Promise<ManagerAccount | null
 
   return readLocalManagers().find(m => m.id === id) ?? null;
 }
+
+/** For /admin/managers (criterion #7) — never returns password hashes to the caller's UI layer. */
+export async function listManagers(): Promise<ManagerAccount[]> {
+  if (supabaseConfigured()) {
+    try {
+      const res = await supabaseRest("managers?select=*&order=created_at.desc");
+      const rows = (await res.json()) as Array<Record<string, unknown>>;
+      return rows.map(r => ({
+        id: r.id as string, email: r.email as string, passwordHash: r.password_hash as string,
+        locationSlug: r.location_slug as string, createdAt: r.created_at as string,
+      }));
+    } catch (e) {
+      if (!(e instanceof SchemaNotMigratedError)) throw e;
+    }
+  }
+  return [...readLocalManagers()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}

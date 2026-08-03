@@ -147,3 +147,64 @@ export async function ingestGotabDay(
 
   return { locationSlug, date, lineItems, totalGrossCents, totalTransactions, breakdown };
 }
+
+const GOTAB_EXPORT_COLUMNS = ["date", "category", "gross_amount", "transaction_count"] as const;
+
+export type GotabExportDay = {
+  date: string;
+  lineItems: GotabLineItem[];
+  totalGrossCents: number;
+  totalTransactions: number;
+  breakdown: Record<string, number>;
+};
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Header sniff for the web upload flow (criterion #1: "detect which source"). Exact-match
+ *  on the required column set — a near-miss (missing/renamed column) is a malformed file,
+ *  not a silent partial parse. */
+export function looksLikeGotabExport(header: string[]): boolean {
+  return GOTAB_EXPORT_COLUMNS.every(c => header.includes(c));
+}
+
+/**
+ * Parse a raw GoTab CSV export (web upload) into one or more days — a single export can
+ * cover a date range (criterion #1: "which date(s) it covers"). Throws a specific,
+ * human-readable message naming the problem on anything malformed/empty/unrecognized
+ * (criterion #8) — never fabricates a partial parse.
+ */
+export function parseGotabCsvExport(text: string): GotabExportDay[] {
+  const lines = text.trim().split("\n").filter(l => l.length > 0);
+  if (lines.length === 0) throw new Error("gotab-ingest: the file is empty — no rows found");
+
+  const header = lines[0].split(",").map(h => h.trim());
+  if (!looksLikeGotabExport(header)) {
+    throw new Error(`gotab-ingest: unrecognized CSV format — expected columns ${GOTAB_EXPORT_COLUMNS.join(", ")}, got: ${header.join(", ")}`);
+  }
+  if (lines.length === 1) throw new Error("gotab-ingest: the file has a header but no data rows");
+
+  const byDate = new Map<string, GotabLineItem[]>();
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split(",").map(c => c.trim());
+    const row = Object.fromEntries(header.map((h, idx) => [h, cells[idx]]));
+    const rowNum = i + 1; // 1-indexed, header is row 1
+
+    if (!row.date || !DATE_RE.test(row.date)) throw new Error(`gotab-ingest: row ${rowNum} has an invalid date "${row.date ?? ""}" — expected YYYY-MM-DD`);
+    if (!row.category) throw new Error(`gotab-ingest: row ${rowNum} is missing a category`);
+    const grossAmountCents = toCents(row.gross_amount);
+    if (!Number.isFinite(grossAmountCents)) throw new Error(`gotab-ingest: row ${rowNum} has a non-numeric gross_amount "${row.gross_amount ?? ""}"`);
+    const transactionCount = parseInt(row.transaction_count, 10);
+    if (!Number.isFinite(transactionCount)) throw new Error(`gotab-ingest: row ${rowNum} has a non-numeric transaction_count "${row.transaction_count ?? ""}"`);
+
+    const item = GotabLineItem.parse({ category: row.category, grossAmountCents, transactionCount });
+    byDate.set(row.date, [...(byDate.get(row.date) ?? []), item]);
+  }
+
+  return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, lineItems]) => {
+    const totalGrossCents = lineItems.reduce((a, r) => a + r.grossAmountCents, 0);
+    const totalTransactions = lineItems.reduce((a, r) => a + r.transactionCount, 0);
+    const breakdown: Record<string, number> = {};
+    for (const r of lineItems) breakdown[r.category] = (breakdown[r.category] ?? 0) + r.grossAmountCents;
+    return { date, lineItems, totalGrossCents, totalTransactions, breakdown };
+  });
+}
