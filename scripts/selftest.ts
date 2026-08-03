@@ -465,6 +465,7 @@ async function main() {
       const r = await fetchWithTimeout("/this-route-does-not-exist");
       const body = await r.text();
       assert(r.status === 404, `expected 404, got ${r.status}`);
+      console.log("DEBUG404", body.slice(0, 2000));
       assert(!/Internal Server Error|at Object\.|node_modules\//.test(body), "leaked a stack trace to the user");
     });
   } finally {
