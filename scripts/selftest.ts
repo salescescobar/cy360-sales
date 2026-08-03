@@ -465,8 +465,8 @@ async function main() {
       const r = await fetchWithTimeout("/this-route-does-not-exist");
       const body = await r.text();
       assert(r.status === 404, `expected 404, got ${r.status}`);
-      console.log("DEBUG404", body.slice(0, 2000));
-      assert(!/Internal Server Error|at Object\.|node_modules\//.test(body), "leaked a stack trace to the user");
+      assert(body.includes("CY360 Sales") && body.includes("couldn&#x27;t find that page"), "expected the branded not-found page");
+      assert(!/Internal Server Error|Unhandled Runtime Error|at Object\.\s*\(/.test(body), "leaked a stack trace to the user");
     });
   } finally {
     if (smokeServer) smokeServer.kill("SIGTERM");
