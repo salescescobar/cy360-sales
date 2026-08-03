@@ -95,7 +95,9 @@ export async function replaceRecognizedRevenue(
           headers: { Prefer: "return=minimal" },
           body: JSON.stringify(rows.map(r => ({
             location_slug: r.locationSlug, source: r.source,
-            period_month: r.periodMonth, business_date: r.businessDate, group_name: r.groupName,
+            // period_month is a `date` column on the live table (not text, as the migration
+            // file has it) — needs a full YYYY-MM-DD, so the first of the month.
+            period_month: `${r.periodMonth}-01`, business_date: r.businessDate, group_name: r.groupName,
             item_name: r.itemName, amount_cents: r.amountCents, tax_cents: r.taxCents, net_cents: r.netCents,
             recognized_on: r.recognizedOn, raw: r.raw,
           }))),
@@ -123,7 +125,7 @@ export async function readRecognizedRevenue(locationSlug: string, fromDate: stri
         const raw = (d.raw as Record<string, unknown>) ?? {};
         return {
           locationSlug: d.location_slug as string, source: "courtreserve" as const, externalId: "",
-          businessDate: d.business_date as string, periodMonth: d.period_month as string, groupName: d.group_name as string,
+          businessDate: d.business_date as string, periodMonth: (d.period_month as string).slice(0, 7), groupName: d.group_name as string,
           itemName: d.item_name as string, amountCents: d.amount_cents as number, taxCents: d.tax_cents as number,
           netCents: d.net_cents as number, transactionType: (raw.TransactionType as string | null) ?? null,
           paymentType: (raw.PaymentType as string | null) ?? null, feeId: null, paymentId: null, relationId: null,
