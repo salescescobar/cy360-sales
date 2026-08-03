@@ -7,8 +7,20 @@ import { ensureAdmin } from "../../packages/knowledge/admins";
  *  toggle works. */
 
 const ORLANDO = "orlando";
-const SEED_DATE = "2026-07-01";
-const SEED_MONTH = "2026-07";
+
+/** A random year+month, well before this product (or Crush Yard's real sales data)
+ *  existed, and randomized like uniqueEmail() below — the live warehouse is a real,
+ *  persistent, shared database (not reset between runs), so a fixed month would collide
+ *  with whatever a previous run already wrote there and break the exact day-count assertion. */
+function uniqueTestMonth(): string {
+  const seed = Date.now() + Math.floor(Math.random() * 1e6);
+  const year = 2000 + (seed % 25); // 2000-2024 — decades before any real data
+  const month = 1 + (Math.floor(seed / 25) % 12);
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+const SEED_MONTH = uniqueTestMonth();
+const SEED_DATE = `${SEED_MONTH}-01`;
 const SEED_TOTAL = "$3,417.75"; // 1867.75 gotab + 1550.00 courtreserve
 
 const ADMIN_EMAIL = "e2e-admin@example.com";
@@ -22,12 +34,12 @@ test.beforeAll(async () => {
     { locationSlug: ORLANDO, date: SEED_DATE, source: "gotab", grossAmountCents: 186775, breakdown: { food: 84250, alcohol: 61000 } },
     { locationSlug: ORLANDO, date: SEED_DATE, source: "courtreserve", grossAmountCents: 155000, breakdown: { pickleball: 120000 } },
   ]);
-  await writeDay(ORLANDO, "2026-07-05", [
-    { locationSlug: ORLANDO, date: "2026-07-05", source: "gotab", grossAmountCents: 50000, breakdown: {} },
-    { locationSlug: ORLANDO, date: "2026-07-05", source: "courtreserve", grossAmountCents: 25000, breakdown: {} },
+  await writeDay(ORLANDO, `${SEED_MONTH}-05`, [
+    { locationSlug: ORLANDO, date: `${SEED_MONTH}-05`, source: "gotab", grossAmountCents: 50000, breakdown: {} },
+    { locationSlug: ORLANDO, date: `${SEED_MONTH}-05`, source: "courtreserve", grossAmountCents: 25000, breakdown: {} },
   ]);
-  await writeDay(ORLANDO, "2026-07-06", [
-    { locationSlug: ORLANDO, date: "2026-07-06", source: "gotab", grossAmountCents: 999999, breakdown: {} }, // courtreserve missing -> incomplete
+  await writeDay(ORLANDO, `${SEED_MONTH}-06`, [
+    { locationSlug: ORLANDO, date: `${SEED_MONTH}-06`, source: "gotab", grossAmountCents: 999999, breakdown: {} }, // courtreserve missing -> incomplete
   ]);
 });
 

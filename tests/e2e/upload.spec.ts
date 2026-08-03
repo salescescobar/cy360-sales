@@ -7,7 +7,20 @@ import { ensureAdmin } from "../../packages/knowledge/admins";
 
 const ADMIN_EMAIL = "e2e-admin-upload@example.com";
 const ADMIN_PASSWORD = "correct horse battery staple admin";
-const UPLOAD_DATE = "2026-07-10";
+
+/** The live warehouse is a real, persistent, shared database (not reset between runs) — a
+ *  fixed date would collide with whatever a previous run already wrote there, and the
+ *  "nothing to replace yet" assertion below depends on this date being untouched. Randomized
+ *  like uniqueEmail() below, decades before any real data. */
+function uniqueTestDate(): string {
+  const seed = Date.now() + Math.floor(Math.random() * 1e6);
+  const year = 2000 + (seed % 25);
+  const month = 1 + (Math.floor(seed / 25) % 12);
+  const day = 1 + (Math.floor(seed / 300) % 28);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+const UPLOAD_DATE = uniqueTestDate();
 
 test.beforeAll(async () => {
   await ensureAdmin(ADMIN_EMAIL, ADMIN_PASSWORD);
@@ -49,7 +62,9 @@ test("upload -> preview -> confirm -> value appears on the dashboard; malformed 
     buffer: Buffer.from("not,a,recognized,format\n1,2,3,4\n"),
   });
   await page.getByRole("button", { name: "Preview" }).click();
-  await expect(page.getByRole("alert")).toContainText(/unrecognized/i);
+  // Next.js's own route-announcer div also carries role="alert" — scope to the app's error
+  // paragraph specifically rather than getByRole("alert"), which resolves to both.
+  await expect(page.locator('p[role="alert"]')).toContainText(/unrecognized/i);
   await expect(page.getByRole("button", { name: /confirm/i })).toHaveCount(0);
 
   // --- upload -> preview -> confirm ---
@@ -59,9 +74,11 @@ test("upload -> preview -> confirm -> value appears on the dashboard; malformed 
     buffer: Buffer.from(`date,category,gross_amount,transaction_count\n${UPLOAD_DATE},food,100.00,5\n`),
   });
   await page.getByRole("button", { name: "Preview" }).click();
-  await expect(page.getByText(UPLOAD_DATE)).toBeVisible();
-  // exact match: the plain total cell reads "$100.00", distinct from the breakdown cell's
-  // "food: $100.00" (same figure, single category) — a bare substring match would hit both.
+  // exact match: the plain date cell reads UPLOAD_DATE alone — a bare substring match would
+  // also hit the "will replace ... for UPLOAD_DATE" copy once this same date is re-uploaded
+  // further down, and the plain total cell "$100.00" distinct from the breakdown cell's
+  // "food: $100.00" (same figure, single category).
+  await expect(page.getByRole("cell", { name: UPLOAD_DATE, exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "$100.00", exact: true })).toBeVisible();
   await expect(page.getByText(/will replace/i)).toHaveCount(0); // first upload for this date — nothing to replace yet
 

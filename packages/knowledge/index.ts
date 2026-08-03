@@ -91,7 +91,11 @@ function localDayPath(locationSlug: string, date: string): string {
 export async function writeDay(locationSlug: string, date: string, rows: DailySalesRow[]): Promise<void> {
   if (supabaseConfigured()) {
     try {
-      await supabaseRest("daily_sales", {
+      // on_conflict is required: without it PostgREST's merge-duplicates targets the table's
+      // primary key (id, an identity column never sent in this payload), so a same-day
+      // re-upload would hit a raw unique_violation on (location_slug, date, source) instead
+      // of upserting — criterion #6 (replace, never duplicate) depends on this.
+      await supabaseRest("daily_sales?on_conflict=location_slug,date,source", {
         method: "POST",
         headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify(rows.map(r => ({
