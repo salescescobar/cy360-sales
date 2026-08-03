@@ -25,7 +25,8 @@
     "cost:report": "tsx scripts/cost-report.ts",
     "selftest": "tsx scripts/selftest.ts",
     "models:check": "tsx scripts/check-models.ts",
-    "security": "tsx scripts/security-check.ts"
+    "security": "tsx scripts/security-check.ts",
+    "diag": "tsx scripts/diag.ts"
   },
   "dependencies": {
     "yaml": "^2.5.0",

@@ -31,7 +31,7 @@ export const BUSINESS_LINE_LABELS: Record<BusinessLine, string> = {
 
 export type BusinessLineRule = {
   source: "gotab" | "courtreserve";
-  matchGroup: string; // ILIKE pattern (case-insensitive substring/exact) against the source group name
+  matchGroup: string | null; // ILIKE pattern against the source group name; null = matches any group
   matchItem: string | null; // ILIKE pattern against the item name; null = matches any item in the group
   businessLine: BusinessLine;
   priority: number; // lower runs first; a rule with matchItem set should outrank its group-only sibling
@@ -86,7 +86,9 @@ export function resolveBusinessLine(
   item: string,
 ): BusinessLine | typeof UNMAPPED {
   const candidates = rules
-    .filter(r => r.source === source && ilikeMatches(r.matchGroup, group) && (r.matchItem == null || ilikeMatches(r.matchItem, item)))
+    .filter(r => r.source === source
+      && (r.matchGroup == null || ilikeMatches(r.matchGroup, group))
+      && (r.matchItem == null || ilikeMatches(r.matchItem, item)))
     .sort((a, b) => a.priority - b.priority);
   return candidates.length > 0 ? candidates[0].businessLine : UNMAPPED;
 }

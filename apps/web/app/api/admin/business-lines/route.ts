@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
 
 const AssignBody = z.object({
   source: z.enum(["gotab", "courtreserve"]),
-  matchGroup: z.string().min(1),
+  matchGroup: z.string().min(1).nullable(),
   matchItem: z.string().min(1).nullable(),
   businessLine: z.enum(BUSINESS_LINE_ORDER as [string, ...string[]]),
   priority: z.number().int().optional(),

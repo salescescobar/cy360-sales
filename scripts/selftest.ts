@@ -284,9 +284,10 @@ async function main() {
   await t("reconciliation: groups by FeeCategory + TransactionType and computes the delta without picking a winner", () => {
     const recognized = [rowsFor("2026-08-01", "Reservation", 15000)];
     const paymentBasis = [{
-      locationSlug: "orlando", externalId: "tx1", businessDate: "2026-08-01", occurredAt: "2026-08-01T10:00:00",
-      category: "Reservation", itemName: "Indoor Pickleball", grossCents: 10000, taxCents: 0, netCents: 10000,
-      paymentType: "card", staffName: null, raw: { TransactionType: null },
+      locationSlug: "orlando", source: "courtreserve" as const, externalId: "tx1", businessDate: "2026-08-01", occurredAt: "2026-08-01T10:00:00",
+      category: "Reservation", itemName: "Indoor Pickleball", quantity: null, grossCents: 10000, discountCents: 0, compCents: 0,
+      taxCents: 0, tipCents: 0, netCents: 10000,
+      paymentType: "card", channel: null, staffName: null, raw: { TransactionType: null },
     }];
     const rows = computeReconciliation(recognized, paymentBasis);
     assert(rows.length === 1, JSON.stringify(rows));

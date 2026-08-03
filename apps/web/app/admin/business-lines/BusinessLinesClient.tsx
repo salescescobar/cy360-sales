@@ -9,7 +9,7 @@ const BUSINESS_LINE_LABELS: Record<string, string> = {
 };
 
 type UnmappedItem = { group: string; item: string; amountCents: number; source: "gotab" | "courtreserve" };
-type Rule = { source: "gotab" | "courtreserve"; matchGroup: string; matchItem: string | null; businessLine: string; priority: number };
+type Rule = { source: "gotab" | "courtreserve"; matchGroup: string | null; matchItem: string | null; businessLine: string; priority: number };
 
 function thisMonth(): string {
   return new Date().toISOString().slice(0, 7);
@@ -127,7 +127,7 @@ export default function BusinessLinesClient({ locations }: { locations: Array<{ 
           {rules.sort((a, b) => a.priority - b.priority).map((r, i) => (
             <tr key={i}>
               <td style={{ padding: 8 }}>{r.source}</td>
-              <td style={{ padding: 8 }}>{r.matchGroup}</td>
+              <td style={{ padding: 8 }}>{r.matchGroup ?? <em>any</em>}</td>
               <td style={{ padding: 8 }}>{r.matchItem ?? <em>any</em>}</td>
               <td style={{ padding: 8 }}>{BUSINESS_LINE_LABELS[r.businessLine] ?? r.businessLine}</td>
               <td style={{ textAlign: "right", padding: 8 }}>{r.priority}</td>

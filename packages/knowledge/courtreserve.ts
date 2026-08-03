@@ -86,17 +86,22 @@ export async function replaceCourtReserveDetail(
     try {
       await supabaseRest(`sales_transactions?location_slug=eq.${locationSlug}&business_date=gte.${fromDate}&business_date=lte.${toDate}`, { method: "DELETE" });
       await supabaseRest(`court_reservations?location_slug=eq.${locationSlug}&business_date=gte.${fromDate}&business_date=lte.${toDate}`, { method: "DELETE" });
-      await supabaseRest(`payment_type_totals?location_slug=eq.${locationSlug}&date=gte.${fromDate}&date=lte.${toDate}`, { method: "DELETE" });
+      // Remote schema (verified live) names these columns business_date/amount_cents/tx_count
+      // with a source column, not the date/gross_cents/transaction_count of the original
+      // migration file — the live table already holds real production totals under those
+      // names, so the code maps to it rather than risk altering a populated production table.
+      await supabaseRest(`payment_type_totals?location_slug=eq.${locationSlug}&business_date=gte.${fromDate}&business_date=lte.${toDate}`, { method: "DELETE" });
 
       if (detail.transactions.length) {
         await supabaseRest("sales_transactions", {
           method: "POST",
           headers: { Prefer: "return=minimal" },
           body: JSON.stringify(detail.transactions.map(t => ({
-            location_slug: t.locationSlug, external_id: t.externalId, business_date: t.businessDate,
-            occurred_at: t.occurredAt, category: t.category, item_name: t.itemName,
-            gross_cents: t.grossCents, tax_cents: t.taxCents, net_cents: t.netCents,
-            payment_type: t.paymentType, staff_name: t.staffName, raw: t.raw,
+            location_slug: t.locationSlug, source: t.source, external_id: t.externalId, business_date: t.businessDate,
+            occurred_at: t.occurredAt, category: t.category, item_name: t.itemName, quantity: t.quantity,
+            gross_cents: t.grossCents, discount_cents: t.discountCents, comp_cents: t.compCents,
+            tax_cents: t.taxCents, tip_cents: t.tipCents, net_cents: t.netCents,
+            payment_type: t.paymentType, channel: t.channel, staff_name: t.staffName, raw: t.raw,
           }))),
         });
       }
@@ -105,8 +110,10 @@ export async function replaceCourtReserveDetail(
           method: "POST",
           headers: { Prefer: "return=minimal" },
           body: JSON.stringify(detail.reservations.map(r => ({
-            location_slug: r.locationSlug, reservation_id: r.reservationId, court_labels: r.courtLabels,
-            court_ids: r.courtIds, start_at: r.startAt, end_at: r.endAt, business_date: r.businessDate,
+            location_slug: r.locationSlug, reservation_id: r.reservationId, court_name: r.courtName,
+            court_type: r.courtType, starts_at: r.startsAt, ends_at: r.endsAt, duration_minutes: r.durationMinutes,
+            players_count: r.playersCount, amount_cents: r.amountCents, status: r.status,
+            business_date: r.businessDate, raw: r.raw,
           }))),
         });
       }
@@ -115,8 +122,8 @@ export async function replaceCourtReserveDetail(
           method: "POST",
           headers: { Prefer: "return=minimal" },
           body: JSON.stringify(detail.paymentTypeTotals.map(p => ({
-            location_slug: p.locationSlug, date: p.date, payment_type: p.paymentType,
-            gross_cents: p.grossCents, transaction_count: p.transactionCount,
+            location_slug: p.locationSlug, source: "courtreserve", business_date: p.date, payment_type: p.paymentType,
+            amount_cents: p.grossCents, tx_count: p.transactionCount,
           }))),
         });
       }
@@ -149,10 +156,13 @@ export async function readCourtReserveTransactions(locationSlug: string, fromDat
       const res = await supabaseRest(`sales_transactions?location_slug=eq.${locationSlug}&business_date=gte.${fromDate}&business_date=lte.${toDate}&order=business_date.asc`);
       const data = (await res.json()) as Array<Record<string, unknown>>;
       return data.map(d => ({
-        locationSlug: d.location_slug as string, externalId: d.external_id as string, businessDate: d.business_date as string,
+        locationSlug: d.location_slug as string, source: "courtreserve" as const, externalId: d.external_id as string, businessDate: d.business_date as string,
         occurredAt: d.occurred_at as string, category: d.category as string, itemName: d.item_name as string,
-        grossCents: d.gross_cents as number, taxCents: d.tax_cents as number, netCents: d.net_cents as number,
-        paymentType: (d.payment_type as string | null) ?? null, staffName: (d.staff_name as string | null) ?? null,
+        quantity: (d.quantity as number | null) ?? null,
+        grossCents: d.gross_cents as number, discountCents: (d.discount_cents as number) ?? 0, compCents: (d.comp_cents as number) ?? 0,
+        taxCents: d.tax_cents as number, tipCents: (d.tip_cents as number) ?? 0, netCents: d.net_cents as number,
+        paymentType: (d.payment_type as string | null) ?? null, channel: (d.channel as string | null) ?? null,
+        staffName: (d.staff_name as string | null) ?? null,
         raw: (d.raw as Record<string, unknown>) ?? {},
       }));
     } catch (e) {

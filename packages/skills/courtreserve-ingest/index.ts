@@ -220,15 +220,21 @@ export async function fetchCourtReserveDetailedRows(
 
 export type SalesTransactionRow = {
   locationSlug: string;
+  source: "courtreserve";
   externalId: string;
   businessDate: string; // YYYY-MM-DD, date(PaidDate)
   occurredAt: string; // PaidDate, as-is
   category: string;
   itemName: string;
+  quantity: number | null;
   grossCents: number;
+  discountCents: number;
+  compCents: number;
   taxCents: number;
+  tipCents: number;
   netCents: number;
   paymentType: string | null;
+  channel: string | null;
   staffName: string | null;
   raw: Record<string, unknown>; // the row MINUS MemberFullName/FamilyName (never stored — invariant, spec section 10)
 };
@@ -236,11 +242,16 @@ export type SalesTransactionRow = {
 export type CourtReservationRow = {
   locationSlug: string;
   reservationId: string;
-  courtLabels: string | null;
-  courtIds: string | null;
-  startAt: string | null;
-  endAt: string | null;
+  courtName: string | null;
+  courtType: string | null;
+  startsAt: string | null;
+  endsAt: string | null;
+  durationMinutes: number | null;
+  playersCount: number | null;
+  amountCents: number;
+  status: string | null;
   businessDate: string;
+  raw: Record<string, unknown>;
 };
 
 export type PaymentTypeTotalRow = {
@@ -254,24 +265,39 @@ export type PaymentTypeTotalRow = {
 const toCentsFromAmount = (n: number) => Math.round(n * 100);
 
 /** THE SYSTEM SHALL NEVER store MemberFullName or FamilyName — drop them before persisting.
- *  OrgMemberId/OrgMemberFamilyId are opaque ids and may be kept. */
-export function mapDetailedRowToTransaction(row: CourtReserveDetailedRow, locationSlug: string): SalesTransactionRow {
-  const { MemberFullName, FamilyName, ...raw } = row;
-  return {
-    locationSlug,
-    externalId: String(row.TransactionId),
-    businessDate: row.PaidDate.slice(0, 10),
-    occurredAt: row.PaidDate,
-    category: row.FeeCategoryName,
-    itemName: row.ItemName,
-    grossCents: toCentsFromAmount(row.Amount),
-    taxCents: toCentsFromAmount(row.TaxTotal),
-    netCents: toCentsFromAmount(row.AmountWithNoTax),
-    paymentType: row.PaymentType ?? null,
-    staffName: row.InstructorNames ?? null,
-    raw,
-  };
+ *  OrgMemberId/OrgMemberFamilyId are opaque ids and may be kept. `externalId` carries a
+ *  `#<occurrence>` suffix (verified against the live table's existing rows 2026-08-02) since
+ *  a single TransactionId can appear on more than one DetailedRow. */
+export function mapDetailedRowsToTransactions(rows: CourtReserveDetailedRow[], locationSlug: string): SalesTransactionRow[] {
+  const occurrence = new Map<string, number>();
+  return rows.map(row => {
+    const { MemberFullName, FamilyName, ...raw } = row;
+    const id = String(row.TransactionId);
+    const idx = occurrence.get(id) ?? 0;
+    occurrence.set(id, idx + 1);
+    return {
+      locationSlug,
+      source: "courtreserve" as const,
+      externalId: `${id}#${idx}`,
+      businessDate: row.PaidDate.slice(0, 10),
+      occurredAt: row.PaidDate,
+      category: row.FeeCategoryName,
+      itemName: row.ItemName,
+      quantity: null,
+      grossCents: toCentsFromAmount(row.Amount),
+      discountCents: 0,
+      compCents: 0,
+      taxCents: toCentsFromAmount(row.TaxTotal),
+      tipCents: 0,
+      netCents: toCentsFromAmount(row.AmountWithNoTax),
+      paymentType: row.PaymentType ?? null,
+      channel: row.TransactionType ?? null,
+      staffName: row.InstructorNames ?? null,
+      raw,
+    };
+  });
 }
+
 
 /** court_reservations, deduped by ReservationId — a reservation can carry multiple fee
  *  line items (multiple DetailedRows), but is one row here. Rows with no ReservationId
@@ -279,6 +305,12 @@ export function mapDetailedRowToTransaction(row: CourtReserveDetailedRow, locati
 function joinIfArray(value: string | (string | number)[] | null | undefined): string | null {
   if (value == null) return null;
   return Array.isArray(value) ? value.join(", ") : value;
+}
+
+function minutesBetween(start: string | null | undefined, end: string | null | undefined): number | null {
+  if (!start || !end) return null;
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  return Number.isFinite(ms) ? Math.round(ms / 60000) : null;
 }
 
 export function mapDetailedRowsToReservations(rows: CourtReserveDetailedRow[], locationSlug: string): CourtReservationRow[] {
@@ -290,11 +322,16 @@ export function mapDetailedRowsToReservations(rows: CourtReserveDetailedRow[], l
     byId.set(reservationId, {
       locationSlug,
       reservationId,
-      courtLabels: joinIfArray(row.CourtLabels),
-      courtIds: joinIfArray(row.CourtIds),
-      startAt: row.Start ?? null,
-      endAt: row.End ?? null,
+      courtName: joinIfArray(row.CourtLabels),
+      courtType: row.FeeCategoryName,
+      startsAt: row.Start ?? null,
+      endsAt: row.End ?? null,
+      durationMinutes: minutesBetween(row.Start, row.End),
+      playersCount: null,
+      amountCents: toCentsFromAmount(row.Amount),
+      status: row.TransactionType ?? null,
       businessDate: row.PaidDate.slice(0, 10),
+      raw: { courtIds: row.CourtIds ?? [], membership: row.MembershipName ?? null },
     });
   }
   return [...byId.values()];
@@ -330,7 +367,7 @@ export async function ingestCourtReserveDetail(
 ): Promise<{ transactions: SalesTransactionRow[]; reservations: CourtReservationRow[]; paymentTypeTotals: PaymentTypeTotalRow[] }> {
   const fetcher = opts.fetchDetailedRows ?? ((s: string, e: string) => fetchCourtReserveDetailedRows(s, e, opts.creds));
   const rawRows = await fetcher(startDate, endDate);
-  const transactions = rawRows.map(r => mapDetailedRowToTransaction(r, locationSlug));
+  const transactions = mapDetailedRowsToTransactions(rawRows, locationSlug);
   const reservations = mapDetailedRowsToReservations(rawRows, locationSlug);
   const paymentTypeTotals = aggregatePaymentTypeTotals(transactions, locationSlug);
   return { transactions, reservations, paymentTypeTotals };

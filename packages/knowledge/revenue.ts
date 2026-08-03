@@ -150,7 +150,7 @@ export async function listBusinessLineRules(): Promise<BusinessLineRule[]> {
       const data = (await res.json()) as Array<Record<string, unknown>>;
       if (data.length > 0) {
         return data.map(d => ({
-          source: d.source as "gotab" | "courtreserve", matchGroup: d.match_group as string,
+          source: d.source as "gotab" | "courtreserve", matchGroup: (d.match_group as string | null) ?? null,
           matchItem: (d.match_item as string | null) ?? null, businessLine: d.business_line as BusinessLineRule["businessLine"],
           priority: d.priority as number,
         }));
