@@ -17,7 +17,7 @@ type MonthlyMetrics = {
   completeDays: number;
   incompleteDays: number;
   breakdown: Record<string, number>;
-  priorPeriod: { totalGrossCents: number; pctChange: number | null } | null;
+  priorPeriod: { totalGrossCents: number; pctChange: number | null; label: string } | null;
 };
 
 const fmtUsd = (cents: number) => (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
