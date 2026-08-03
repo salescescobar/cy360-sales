@@ -13,3 +13,4 @@ test-results/
 .local-storage/
 .tmp/
 data/imports/
+tests/e2e/judge-fixtures/admin-credentials.json

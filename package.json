@@ -21,6 +21,7 @@
     "backfill:courtreserve": "tsx scripts/backfill-courtreserve.ts",
     "seed:fixtures": "tsx scripts/seed-fixtures.ts",
     "seed:admin": "tsx scripts/seed-admin.ts",
+    "seed:judge-admin": "tsx scripts/seed-judge-admin.ts",
     "cost:report": "tsx scripts/cost-report.ts",
     "selftest": "tsx scripts/selftest.ts",
     "models:check": "tsx scripts/check-models.ts",
