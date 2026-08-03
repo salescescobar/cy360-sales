@@ -87,8 +87,46 @@ function localDayPath(locationSlug: string, date: string): string {
   return join(LOCAL_DIR, locationSlug, `${date}.json`);
 }
 
+/** Reads whatever normalized rows are on disk for a day, dropping anything that doesn't
+ *  match the DailySalesRow shape rather than letting a corrupted file leak through. */
+function localDayRows(locationSlug: string, date: string): DailySalesRow[] {
+  const path = localDayPath(locationSlug, date);
+  if (!existsSync(path)) return [];
+  const raw = JSON.parse(readFileSync(path, "utf8"));
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((r: unknown) => DailySalesRow.safeParse(r).success);
+}
+
+let warnedInvalidRow = false;
+
+/** A row that fails DailySalesRow validation (e.g. a non-numeric value in `breakdown`,
+ *  the shape a direct/manual write to the warehouse produces instead of going through
+ *  writeDay) is dropped rather than surfaced — treated as if that source never loaded,
+ *  never as fabricated revenue. Prevents a poisoned field from becoming a displayed $NaN
+ *  or a string-concatenated month total (aggregateDaily/aggregateMonthly trust this row
+ *  shape completely). */
+function warnInvalidRow(locationSlug: string, date: string, source: unknown): void {
+  if (warnedInvalidRow) return;
+  warnedInvalidRow = true;
+  console.error(
+    `⚠ knowledge: dropped an invalid daily_sales row for ${locationSlug}/${date} (source=${String(source)}) — ` +
+    "breakdown must be Record<string, number>. This row didn't come from writeDay/the confirmed " +
+    "import path and is being treated as not-loaded rather than trusted.",
+  );
+}
+
+/** Merges two row sets by source, `override` winning when both have the same source —
+ *  used to let Supabase take priority per-source while local disk fills in any source
+ *  Supabase doesn't have (or just dropped for failing validation). */
+function mergeRowsBySource(base: DailySalesRow[], override: DailySalesRow[]): DailySalesRow[] {
+  const bySource = new Map(base.map(r => [r.source, r]));
+  for (const r of override) bySource.set(r.source, r);
+  return [...bySource.values()];
+}
+
 /** Upsert a day's normalized rows (one or both sources present). Merges with whatever already loaded that day. */
 export async function writeDay(locationSlug: string, date: string, rows: DailySalesRow[]): Promise<void> {
+  for (const r of rows) DailySalesRow.parse(r);
   if (supabaseConfigured()) {
     try {
       // on_conflict is required: without it PostgREST's merge-duplicates targets the table's
@@ -119,49 +157,64 @@ export async function writeDay(locationSlug: string, date: string, rows: DailySa
 }
 
 export async function readDay(locationSlug: string, date: string): Promise<DailySalesRow[]> {
+  const local = localDayRows(locationSlug, date);
   if (supabaseConfigured()) {
     try {
       const res = await supabaseRest(`daily_sales?location_slug=eq.${locationSlug}&date=eq.${date}`);
       const data = (await res.json()) as Array<Record<string, unknown>>;
-      return data.map(d => ({
-        locationSlug: d.location_slug as string, date: d.date as string, source: d.source as "gotab" | "courtreserve",
-        grossAmountCents: d.gross_amount_cents as number, breakdown: d.breakdown as Record<string, number>,
-      }));
+      const valid: DailySalesRow[] = [];
+      for (const d of data) {
+        const parsed = DailySalesRow.safeParse({
+          locationSlug: d.location_slug, date: d.date, source: d.source,
+          grossAmountCents: d.gross_amount_cents, breakdown: d.breakdown,
+        });
+        if (parsed.success) valid.push(parsed.data);
+        else warnInvalidRow(locationSlug, date, d.source);
+      }
+      // Supabase wins per-source when valid; local disk fills in anything Supabase
+      // doesn't have (never configured yet, or a row that just failed validation above).
+      return mergeRowsBySource(local, valid);
     } catch (e) {
       if (!(e instanceof SchemaNotMigratedError)) throw e;
       warnSchemaNotMigrated();
     }
   }
-  const path = localDayPath(locationSlug, date);
-  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : [];
+  return local;
 }
 
 /** All days loaded for a location in a given month (YYYY-MM), oldest first. */
-export async function readMonth(locationSlug: string, month: string): Promise<Map<string, DailySalesRow[]>> {
+function localMonthRows(locationSlug: string, month: string): Map<string, DailySalesRow[]> {
   const result = new Map<string, DailySalesRow[]>();
+  const dir = join(LOCAL_DIR, locationSlug);
+  if (!existsSync(dir)) return result;
+  for (const file of readdirSync(dir).sort()) {
+    if (!file.startsWith(month) || !file.endsWith(".json")) continue;
+    const date = file.replace(".json", "");
+    result.set(date, localDayRows(locationSlug, date));
+  }
+  return result;
+}
+
+export async function readMonth(locationSlug: string, month: string): Promise<Map<string, DailySalesRow[]>> {
+  const result = localMonthRows(locationSlug, month);
   if (supabaseConfigured()) {
     try {
       const res = await supabaseRest(`daily_sales?location_slug=eq.${locationSlug}&date=gte.${month}-01&date=lt.${nextMonth(month)}-01&order=date.asc`);
       const data = (await res.json()) as Array<Record<string, unknown>>;
       for (const d of data) {
-        const row: DailySalesRow = {
-          locationSlug: d.location_slug as string, date: d.date as string, source: d.source as "gotab" | "courtreserve",
-          grossAmountCents: d.gross_amount_cents as number, breakdown: d.breakdown as Record<string, number>,
-        };
-        result.set(row.date, [...(result.get(row.date) ?? []), row]);
+        const parsed = DailySalesRow.safeParse({
+          locationSlug: d.location_slug, date: d.date, source: d.source,
+          grossAmountCents: d.gross_amount_cents, breakdown: d.breakdown,
+        });
+        if (!parsed.success) { warnInvalidRow(locationSlug, d.date as string, d.source); continue; }
+        // Supabase wins per-source when valid; local disk (seeded above) fills any gap.
+        result.set(parsed.data.date, mergeRowsBySource(result.get(parsed.data.date) ?? [], [parsed.data]));
       }
       return result;
     } catch (e) {
       if (!(e instanceof SchemaNotMigratedError)) throw e;
       warnSchemaNotMigrated();
     }
-  }
-  const dir = join(LOCAL_DIR, locationSlug);
-  if (!existsSync(dir)) return result;
-  for (const file of readdirSync(dir).sort()) {
-    if (!file.startsWith(month) || !file.endsWith(".json")) continue;
-    const date = file.replace(".json", "");
-    result.set(date, JSON.parse(readFileSync(join(dir, file), "utf8")));
   }
   return result;
 }

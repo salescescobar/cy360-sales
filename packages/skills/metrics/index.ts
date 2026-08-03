@@ -24,9 +24,12 @@ export function aggregateDaily(day: SourceDay): DailyMetrics {
   const gotabGrossCents = day.gotab?.totalGrossCents ?? 0;
   const courtreserveGrossCents = day.courtreserve?.totalGrossCents ?? 0;
 
+  // Only finite numeric values become a displayed dollar amount — a non-numeric field
+  // reaching this far (e.g. from data written outside writeDay's validation) is dropped
+  // instead of rendering as $NaN or string-concatenating into the month total below.
   const breakdown: Record<string, number> = {};
-  for (const [k, v] of Object.entries(day.gotab?.breakdown ?? {})) breakdown[`gotab:${k}`] = v;
-  for (const [k, v] of Object.entries(day.courtreserve?.breakdown ?? {})) breakdown[`courtreserve:${k}`] = v;
+  for (const [k, v] of Object.entries(day.gotab?.breakdown ?? {})) if (Number.isFinite(v)) breakdown[`gotab:${k}`] = v;
+  for (const [k, v] of Object.entries(day.courtreserve?.breakdown ?? {})) if (Number.isFinite(v)) breakdown[`courtreserve:${k}`] = v;
 
   return {
     date: day.date,
@@ -76,7 +79,7 @@ export function aggregateMonthly(
   const courtreserveGrossCents = complete.reduce((a, d) => a + d.courtreserveGrossCents, 0);
 
   const breakdown: Record<string, number> = {};
-  for (const d of complete) for (const [k, v] of Object.entries(d.breakdown)) breakdown[k] = (breakdown[k] ?? 0) + v;
+  for (const d of complete) for (const [k, v] of Object.entries(d.breakdown)) if (Number.isFinite(v)) breakdown[k] = (breakdown[k] ?? 0) + v;
 
   let priorPeriod: MonthlyMetrics["priorPeriod"] = null;
   if (prior) {

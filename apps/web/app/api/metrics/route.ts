@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { readDay, readMonth, type DailySalesRow } from "../../../../../packages/knowledge/index";
 import { aggregateDaily, aggregateMonthly, type DailyMetrics } from "../../../../../packages/skills/metrics/index";
+import { etDateString } from "../../../../../packages/loops/index";
 import { activeLocationSlugs } from "../../lib/locations";
 import { verifySession, SESSION_COOKIE_NAME } from "../../lib/session";
 
@@ -47,7 +48,10 @@ export async function GET(req: NextRequest) {
   // date/month reach the filesystem (local fallback) and a Supabase filter string (live
   // warehouse) — reject anything that isn't the exact shape before either sees it, so a
   // malformed or oversized value can never become a path-traversal or query-injection input.
-  const today = new Date().toISOString().slice(0, 10);
+  // "Today" is the ET business date (packages/loops uses the same convention for refresh
+  // targeting) — UTC's calendar date rolls over hours before ET's, which previously made
+  // elapsedDays (and the "first N days" label) run a day ahead of the data actually loaded.
+  const today = etDateString(new Date());
   const re = period === "day" ? DATE_RE : MONTH_RE;
   const value = dateParam ?? (period === "day" ? today : today.slice(0, 7));
   if (!re.test(value)) {
