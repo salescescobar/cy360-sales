@@ -38,7 +38,13 @@ export async function GET(req: NextRequest) {
 
   const jar = await cookies();
   const session = verifySession(jar.get(SESSION_COOKIE_NAME)?.value);
-  if (!session || session.locationSlug !== location) {
+  // Distinct from the wrong-location case below — an absent session must never be reported
+  // as if a session exists but points at a different location (misleading about what the
+  // caller needs to do next: sign in, vs. sign in as the right manager).
+  if (!session) {
+    return NextResponse.json({ error: "authentication required — sign in to view this dashboard" }, { status: 401 });
+  }
+  if (session.locationSlug !== location) {
     return NextResponse.json({ error: "forbidden — not your location" }, { status: 403 });
   }
   if (!activeLocationSlugs().includes(location)) {
