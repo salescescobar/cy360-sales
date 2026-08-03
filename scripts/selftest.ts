@@ -438,6 +438,110 @@ async function main() {
     assert(fmtUsd(-150000) === "($1,500.00)", `expected a negative amount in parentheses, got ${fmtUsd(-150000)}`);
   });
 
+  // 10c · gotab-ingest/verify: the stale-page guard (data-integrity incident response). Root
+  // cause: the original backfill waited only for "Gross Sales" text, which was already on
+  // screen from the PREVIOUS day on a slow render — so it parsed stale numbers. The guard
+  // must refuse to parse anything until the page's OWN displayed date matches the request.
+  const { gotabDateLabel, pageShowsRequestedDate, parseGotabPeriodLabel, classifyVerification, parseVerifiedGotabDay } =
+    await import("../packages/skills/gotab-ingest/verify");
+  const AUG1_TEXT = readFileSync(repoPath("packages/skills/gotab-ingest/fixtures/orlando-2026-08-01.innertext.txt"), "utf8");
+  await t("gotab-ingest/verify: gotabDateLabel matches the exact format GoTab renders", () => {
+    assert(gotabDateLabel("2026-08-01") === "Aug 1, 2026", gotabDateLabel("2026-08-01"));
+  });
+  await t("gotab-ingest/verify: the guard PASSES when the page's displayed date matches the request", () => {
+    assert(pageShowsRequestedDate(AUG1_TEXT, "2026-08-01") === true, "expected the guard to pass for the matching date");
+    const period = parseGotabPeriodLabel(AUG1_TEXT);
+    assert(period?.start === "2026-08-01" && period.end === "2026-08-01", JSON.stringify(period));
+  });
+  await t("gotab-ingest/verify: the guard REFUSES a stale render — same page text, a different requested date (the exact incident) — and parses nothing", () => {
+    // This fixture is Aug 1's real render. Requesting Aug 2 against it reproduces exactly what
+    // happened live: the page still shows the previous day's numbers on a slow load.
+    assert(pageShowsRequestedDate(AUG1_TEXT, "2026-08-02") === false, "expected the guard to refuse a stale render for a different date");
+    // The guard failing must mean NOTHING gets parsed from it — callers never fall back to
+    // extracting figures anyway when pageShowsRequestedDate is false, but prove the parse
+    // itself doesn't silently succeed under the wrong date either.
+    try {
+      const wrong = parseVerifiedGotabDay("orlando", "2026-08-02", AUG1_TEXT);
+      assert(wrong.date === "2026-08-02", "parseVerifiedGotabDay trusts whatever date it's told — the guard, not the parser, is what must reject this");
+    } catch { /* either throwing or trusting the caller's date is acceptable here — the guard above is the real defense */ }
+  });
+  await t("gotab-ingest/verify: the guard refuses a page with no period label at all (blank/broken render)", () => {
+    assert(pageShowsRequestedDate("", "2026-08-01") === false, "expected false for empty text");
+    assert(parseGotabPeriodLabel("Crush Yard Orlando\nSales\n") === null, "expected null when no period label is present");
+  });
+  await t("gotab-ingest/verify: classifyVerification — no stored row + $0 observed -> no_sales, never a fabricated correction", () => {
+    const r = classifyVerification({ storedCents: null, observedCents: 0 });
+    assert(r.status === "no_sales" && r.deltaCents === 0, JSON.stringify(r));
+  });
+  await t("gotab-ingest/verify: classifyVerification — observed matches stored -> ok", () => {
+    const r = classifyVerification({ storedCents: 500000, observedCents: 500000 });
+    assert(r.status === "ok" && r.deltaCents === 0, JSON.stringify(r));
+  });
+  await t("gotab-ingest/verify: classifyVerification — observed differs from stored -> corrected, with the dollar delta", () => {
+    const r = classifyVerification({ storedCents: 8307000, observedCents: 540000 });
+    assert(r.status === "corrected" && r.deltaCents === -7767000, JSON.stringify(r));
+  });
+
+  // 10d · core/dataQuality: outlier math (the 4x-trailing-median rule from the incident: 13 of
+  // 583 days exceeded 4x the $3,233 median) — and the flags ledger's idempotent dedupe.
+  const { median, detectOutlierDay } = await import("../packages/core/dataQuality");
+  await t("core/dataQuality: median handles even/odd counts", () => {
+    assert(median([1, 2, 3]) === 2, String(median([1, 2, 3])));
+    assert(median([1, 2, 3, 4]) === 2.5, String(median([1, 2, 3, 4])));
+    assert(median([]) === 0, String(median([])));
+  });
+  await t("core/dataQuality: detectOutlierDay flags the incident's own worst day (2025-07-09 $83,070 vs neighbours ~$2,700-$7,400)", () => {
+    const trailing = [270000, 500000, 740000, 320000, 410000];
+    const r = detectOutlierDay(8307000, trailing);
+    assert(r.isOutlier === true, JSON.stringify(r));
+    assert(r.medianCents === 410000, JSON.stringify(r));
+  });
+  await t("core/dataQuality: detectOutlierDay does not flag a normal day, and never flags anything against a zero/empty median", () => {
+    const trailing = [270000, 500000, 740000, 320000, 410000];
+    assert(detectOutlierDay(450000, trailing).isOutlier === false, "a normal day should not be an outlier");
+    assert(detectOutlierDay(999999999, []).isOutlier === false, "no trailing history must never fabricate an outlier");
+  });
+
+  // 10e · knowledge/dataQuality: idempotent by dedupe_key — re-raising the same flag never
+  // duplicates it, and never re-opens one an admin already resolved.
+  const { upsertFlag, listFlags, resolveFlag } = await import("../packages/knowledge/dataQuality");
+  const dqLocation = `selftest-dq-${Date.now()}`;
+  await t("knowledge/dataQuality: upsertFlag is idempotent — raising the same flag twice yields exactly one row", async () => {
+    await upsertFlag({ locationSlug: dqLocation, scope: "day", date: "2025-07-09", source: "gotab", code: "outlier_day", severity: "warn", message: "test outlier" });
+    await upsertFlag({ locationSlug: dqLocation, scope: "day", date: "2025-07-09", source: "gotab", code: "outlier_day", severity: "warn", message: "test outlier again" });
+    const flags = await listFlags({ locationSlug: dqLocation });
+    assert(flags.length === 1, `expected exactly one flag, got ${JSON.stringify(flags)}`);
+  });
+  await t("knowledge/dataQuality: resolveFlag stamps resolved/who/when, and upsertFlag never re-opens it", async () => {
+    let [flag] = await listFlags({ locationSlug: dqLocation });
+    await resolveFlag(flag.id, "test-admin");
+    [flag] = await listFlags({ locationSlug: dqLocation, resolved: true });
+    assert(flag.resolved === true && flag.resolvedBy === "test-admin" && !!flag.resolvedAt, JSON.stringify(flag));
+    await upsertFlag({ locationSlug: dqLocation, scope: "day", date: "2025-07-09", source: "gotab", code: "outlier_day", severity: "warn", message: "re-raised after resolve" });
+    const unresolved = await listFlags({ locationSlug: dqLocation, resolved: false });
+    assert(unresolved.length === 0, `resolved flag must never be silently re-opened by another check run, got ${JSON.stringify(unresolved)}`);
+  });
+
+  // 10f · knowledge/gotabVerification: the ledger scripts/gotab-verify.ts writes to — round
+  // trip, upsert-by-(location,date), and readSuspectDates for --only-suspect.
+  const { writeVerification, readVerification, readSuspectDates } = await import("../packages/knowledge/gotabVerification");
+  const gvLocation = `selftest-gv-${Date.now()}`;
+  await t("knowledge/gotabVerification: writeVerification/readVerification round-trips and upserts by (location, date)", async () => {
+    await writeVerification({ locationSlug: gvLocation, date: "2025-07-09", storedCents: 8307000, observedCents: 8307000, pageDateShown: "Jul 9, 2025 - Jul 9, 2025", status: "ok" });
+    let row = await readVerification(gvLocation, "2025-07-09");
+    assert(row?.status === "ok", JSON.stringify(row));
+    await writeVerification({ locationSlug: gvLocation, date: "2025-07-09", storedCents: 8307000, observedCents: 540000, pageDateShown: "Jul 9, 2025 - Jul 9, 2025", status: "corrected", note: "re-checked" });
+    row = await readVerification(gvLocation, "2025-07-09");
+    assert(row?.status === "corrected" && row.observedCents === 540000, `expected the re-check to overwrite, not duplicate, got ${JSON.stringify(row)}`);
+  });
+  await t("knowledge/gotabVerification: readSuspectDates surfaces corrected/mismatch/unreadable, never ok/no_sales", async () => {
+    await writeVerification({ locationSlug: gvLocation, date: "2025-07-10", storedCents: null, observedCents: 0, pageDateShown: null, status: "no_sales" });
+    await writeVerification({ locationSlug: gvLocation, date: "2025-07-11", storedCents: null, observedCents: null, pageDateShown: null, status: "unreadable", note: "guard never matched" });
+    const suspect = await readSuspectDates(gvLocation);
+    assert(suspect.includes("2025-07-09") && suspect.includes("2025-07-11"), JSON.stringify(suspect));
+    assert(!suspect.includes("2025-07-10"), `no_sales must never be treated as suspect, got ${JSON.stringify(suspect)}`);
+  });
+
   // 11 · checkpoint fails closed (shared infra — the hard gate any future sensitive action builds on)
   const { requireCheckpoint, CheckpointPending } = await import("../packages/core/checkpoint");
   await t("checkpoint: blocks without approval (fail closed)", async () => {

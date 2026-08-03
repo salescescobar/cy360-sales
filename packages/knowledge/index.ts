@@ -237,6 +237,42 @@ export async function readMonth(locationSlug: string, month: string): Promise<Ma
   return result;
 }
 
+/**
+ * One source's gross-cents series for a location over a plain date range — the trailing
+ * history packages/core/dataQuality.ts medians against. Never merges sources (an outlier
+ * check for gotab must never be diluted by courtreserve's numbers, or vice versa).
+ */
+export async function readSourceGrossRange(
+  locationSlug: string,
+  source: "gotab" | "courtreserve",
+  fromDate: string,
+  toDate: string,
+): Promise<Array<{ date: string; grossAmountCents: number }>> {
+  if (supabaseConfigured()) {
+    try {
+      const res = await supabaseRest(
+        `daily_sales?location_slug=eq.${locationSlug}&source=eq.${source}&date=gte.${fromDate}&date=lte.${toDate}&select=date,gross_amount_cents&order=date.asc`,
+      );
+      const data = (await res.json()) as Array<{ date: string; gross_amount_cents: number }>;
+      return data.map(d => ({ date: d.date, grossAmountCents: d.gross_amount_cents }));
+    } catch (e) {
+      if (!(e instanceof SchemaNotMigratedError)) throw e;
+      warnSchemaNotMigrated();
+    }
+  }
+  const dir = join(LOCAL_DIR, locationSlug);
+  if (!existsSync(dir)) return [];
+  const out: Array<{ date: string; grossAmountCents: number }> = [];
+  for (const file of readdirSync(dir).sort()) {
+    if (!file.endsWith(".json")) continue;
+    const date = file.replace(".json", "");
+    if (date < fromDate || date > toDate) continue;
+    const row = localDayRows(locationSlug, date).find(r => r.source === source);
+    if (row) out.push({ date, grossAmountCents: row.grossAmountCents });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
 function nextMonth(month: string): string {
   const [y, m] = month.split("-").map(Number);
   const d = new Date(Date.UTC(y, m, 1)); // m is already next month (0-indexed) since input m is 1-indexed

@@ -17,6 +17,7 @@ import {
 import { writeDay, readDay, readMonth, traceRefresh, readTraces, type DailySalesRow, type RefreshStatus } from "../knowledge/index";
 import { replaceCourtReserveDetail } from "../knowledge/courtreserve";
 import { replaceRecognizedRevenue, readRecognizedRevenue, listBusinessLineRules, tryRecordAlert } from "../knowledge/revenue";
+import { runDataQualityChecks } from "../core/dataQuality";
 import { computeGrowthReport, priorMonthOf, sameMonthLastYearOf, lastDayOfMonth, type GotabDayInput, type PeriodInput } from "../skills/growth-report/index";
 import { repoPath } from "../core/paths";
 
@@ -178,6 +179,18 @@ export async function refreshLocationDay(
     if (rows.length) await writeDay(locationSlug, date, rows);
   } catch (e) {
     error = [error, `warehouse write: ${(e as Error).message}`].filter(Boolean).join("; ");
+  }
+
+  // Guardrails (packages/core/dataQuality.ts): every write gets checked against trailing
+  // history and re-verification status before it can be presented as final. A guardrail
+  // failure is logged, never allowed to fail the refresh itself — the flag missing is worse
+  // than the refresh reporting incomplete, but neither should crash the batch.
+  for (const row of rows) {
+    try {
+      await runDataQualityChecks(locationSlug, date, row.source, row.grossAmountCents);
+    } catch (e) {
+      console.error(`refreshLocationDay: data-quality check failed for ${locationSlug} ${date} ${row.source}: ${(e as Error).message}`);
+    }
   }
 
   const status: "complete" | "incomplete" =

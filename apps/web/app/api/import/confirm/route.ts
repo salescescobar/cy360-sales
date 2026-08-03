@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { detectAndParseUpload, checkUploadSize } from "../../../../../../packages/skills/upload-ingest/index";
 import { readDay, writeDay, traceImportedDay, recordImportUpload, type DailySalesRow } from "../../../../../../packages/knowledge/index";
 import { saveImportFile } from "../../../../../../packages/core/storage";
+import { runDataQualityChecks } from "../../../../../../packages/core/dataQuality";
 import { activeLocationSlugs } from "../../../lib/locations";
 import { verifyAdminSession, ADMIN_SESSION_COOKIE_NAME } from "../../../lib/session";
 
@@ -66,6 +67,11 @@ export async function POST(req: NextRequest) {
       storagePath: stored.storagePath, originalFilename: file.name, uploadedBy: admin.adminId,
     });
     await traceImportedDay(location, day.date);
+    try {
+      await runDataQualityChecks(location, day.date, parsed.source, day.totalGrossCents);
+    } catch (e) {
+      console.error(`import confirm: data-quality check failed for ${location} ${day.date}: ${(e as Error).message}`);
+    }
     written.push(day.date);
   }
 

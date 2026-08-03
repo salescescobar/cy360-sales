@@ -22,6 +22,7 @@ export default async function AdminReconciliationPage() {
           <a href="/admin/managers" style={{ marginRight: 16 }}>Managers</a>
           <a href="/admin/business-lines" style={{ marginRight: 16 }}>Business lines</a>
           <a href="/admin/alerts" style={{ marginRight: 16 }}>Alerts</a>
+          <a href="/admin/data-quality" style={{ marginRight: 16 }}>Data quality</a>
           <a href="/import" style={{ marginRight: 16 }}>Import sales data</a>
           <form method="POST" action="/api/admin/logout" style={{ display: "inline" }}>
             <button type="submit">Log out</button>

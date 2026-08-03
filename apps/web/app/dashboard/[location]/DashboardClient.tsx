@@ -24,6 +24,7 @@ type GrowthReport = {
 type DrilldownTx = { date: string; amountCents: number; source: "gotab" | "courtreserve"; transactionType?: string | null; paymentType?: string | null };
 type DrilldownItem = { item: string; amountCents: number; transactions: DrilldownTx[] };
 type DrilldownGroup = { group: string; amountCents: number; items: DrilldownItem[] };
+type DataQualityInfo = { hasUnresolvedError: boolean; dates: string[]; messages: string[] };
 
 const THRESHOLDS = { green_pct: 5, red_pct: -5 }; // display only — the server (config.yaml) is authoritative
 
@@ -115,6 +116,7 @@ export default function DashboardClient({ location }: { location: string }) {
   const [date, setDate] = useState(yesterdayIso());
   const [month, setMonth] = useState(yesterdayIso().slice(0, 7));
   const [report, setReport] = useState<GrowthReport | null>(null);
+  const [dataQuality, setDataQuality] = useState<DataQualityInfo | null>(null);
   const [drilldown, setDrilldown] = useState<Record<string, DrilldownGroup[]>>({});
   const [openLine, setOpenLine] = useState<string | null>(null);
   // Drill-down depth (line -> group -> item) lives in the URL alongside period/date/month
@@ -163,7 +165,7 @@ export default function DashboardClient({ location }: { location: string }) {
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
         return r.json();
       })
-      .then(data => { if (cancelled || data == null) return; setReport(data.report); setDrilldown(data.drilldown ?? {}); })
+      .then(data => { if (cancelled || data == null) return; setReport(data.report); setDrilldown(data.drilldown ?? {}); setDataQuality(data.dataQuality ?? null); })
       .catch(e => { if (!cancelled) setError(String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -188,6 +190,21 @@ export default function DashboardClient({ location }: { location: string }) {
 
       {!loading && !error && report && (
         <section>
+          {dataQuality?.hasUnresolvedError && (
+            <div
+              role="alert"
+              style={{
+                background: "#FBEAEA", border: `1px solid ${theme.down}`, borderRadius: theme.radius.card,
+                padding: "10px 14px", margin: "0 0 10px", fontSize: 13, color: theme.ink,
+              }}
+            >
+              <strong style={{ color: theme.down }}>These figures may be wrong.</strong>{" "}
+              {dataQuality.dates.length > 0
+                ? <>Unresolved data-quality issue{dataQuality.dates.length > 1 ? "s" : ""} on {dataQuality.dates.join(", ")}.</>
+                : <>An unresolved data-quality issue affects this period.</>}
+              {" "}An admin needs to review and resolve this in Admin → Data quality before these numbers should be trusted.
+            </div>
+          )}
           <p style={{ color: theme.textSecondary, fontSize: 12.5, margin: "0 0 6px" }}>
             Recognized through <strong style={{ color: theme.textTertiary }}>{report.recognitionThroughDate}</strong> — earned-by-service-date only; future bookings never included.
           </p>

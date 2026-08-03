@@ -6,6 +6,7 @@ import { buildPeriodInput, etDateString } from "../../../../../packages/loops/in
 import { computeGrowthReport, buildDrilldown, buildHourlyCurve, priorMonthOf, sameMonthLastYearOf, type CurrentPeriodPhase } from "../../../../../packages/skills/growth-report/index";
 import { readDay } from "../../../../../packages/knowledge/index";
 import { listBusinessLineRules } from "../../../../../packages/knowledge/revenue";
+import { listFlags } from "../../../../../packages/knowledge/dataQuality";
 import { repoPath } from "../../../../../packages/core/paths";
 import { activeLocationSlugs } from "../../lib/locations";
 import { verifySession, SESSION_COOKIE_NAME } from "../../lib/session";
@@ -106,7 +107,24 @@ export async function GET(req: NextRequest) {
       return { gotabGrossCents: gotab?.grossAmountCents ?? null, courtreserveGrossCents: courtreserve?.grossAmountCents ?? null };
     })() : null;
 
-    return NextResponse.json({ report, drilldown, hourly, bySource });
+    // Honesty banner: never let an unresolved error-severity flag ride along silently under
+    // a period that reads as final (packages/core/dataQuality.ts writes these; an admin
+    // clears them from /admin/data-quality once actually verified). Scoped to whatever the
+    // manager is actually looking at — a day view only names that day's own flags/month
+    // rollup, a month view sweeps every day flag inside it.
+    const openErrors = (await listFlags({ locationSlug: location, resolved: false })).filter(f => f.severity === "error");
+    const inScope = openErrors.filter(f =>
+      period === "day"
+        ? (f.scope === "day" && f.date === value) || (f.scope === "month" && f.month === value.slice(0, 7))
+        : (f.scope === "month" && f.month === value) || (f.scope === "day" && !!f.date && f.date.slice(0, 7) === value),
+    );
+    const dataQuality = {
+      hasUnresolvedError: inScope.length > 0,
+      dates: [...new Set(inScope.filter(f => f.scope === "day" && f.date).map(f => f.date as string))].sort(),
+      messages: inScope.map(f => f.message),
+    };
+
+    return NextResponse.json({ report, drilldown, hourly, bySource, dataQuality });
   } catch (e) {
     console.error("growth-report failed", e);
     return NextResponse.json({ error: "couldn't load the growth report — try again shortly" }, { status: 500 });
