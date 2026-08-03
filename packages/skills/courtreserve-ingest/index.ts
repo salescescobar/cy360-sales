@@ -266,23 +266,27 @@ const toCentsFromAmount = (n: number) => Math.round(n * 100);
 
 /** THE SYSTEM SHALL NEVER store MemberFullName or FamilyName — drop them before persisting.
  *  OrgMemberId/OrgMemberFamilyId are opaque ids and may be kept. `externalId` carries a
- *  `#<occurrence>` suffix (verified against the live table's existing rows 2026-08-02) since
- *  a single TransactionId can appear on more than one DetailedRow; the occurrence count is
- *  keyed on (TransactionId, ItemName) — the same pair the live unique constraint covers
- *  alongside external_id — so two rows only need disambiguating when they'd otherwise collide. */
+ *  `#<businessDate>#<occurrence>` suffix since a single TransactionId can recur across more
+ *  than one DetailedRow AND, for an installment/partial payment, across more than one PaidDate
+ *  (verified live 2026-08-02: TransactionId 49151068 returned with PaidDate 2025-01-25 from a
+ *  January fetch and PaidDate 2025-02-01 from February's — same id, different payment event).
+ *  Occurrence is keyed on (TransactionId, ItemName, businessDate) so distinct payment events
+ *  never collide with each other under the live (location_slug, source, external_id, item_name)
+ *  unique constraint. */
 export function mapDetailedRowsToTransactions(rows: CourtReserveDetailedRow[], locationSlug: string): SalesTransactionRow[] {
   const occurrence = new Map<string, number>();
   return rows.map(row => {
     const { MemberFullName, FamilyName, ...raw } = row;
     const id = String(row.TransactionId);
-    const dedupeKey = `${id}::${row.ItemName}`;
+    const businessDate = row.PaidDate.slice(0, 10);
+    const dedupeKey = `${id}::${row.ItemName}::${businessDate}`;
     const idx = occurrence.get(dedupeKey) ?? 0;
     occurrence.set(dedupeKey, idx + 1);
     return {
       locationSlug,
       source: "courtreserve" as const,
-      externalId: `${id}#${idx}`,
-      businessDate: row.PaidDate.slice(0, 10),
+      externalId: `${id}#${businessDate}#${idx}`,
+      businessDate,
       occurredAt: row.PaidDate,
       category: row.FeeCategoryName,
       itemName: row.ItemName,
