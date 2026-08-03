@@ -26,7 +26,8 @@
     "selftest": "tsx scripts/selftest.ts",
     "models:check": "tsx scripts/check-models.ts",
     "security": "tsx scripts/security-check.ts",
-    "diag": "tsx scripts/diag.ts"
+    "diag": "tsx scripts/diag.ts",
+    "diag2": "tsx scripts/diag2.ts"
   },
   "dependencies": {
     "yaml": "^2.5.0",

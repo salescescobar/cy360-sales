@@ -97,6 +97,24 @@ function localDayRows(locationSlug: string, date: string): DailySalesRow[] {
   return raw.filter((r: unknown) => DailySalesRow.safeParse(r).success);
 }
 
+/** The live table's GoTab rows (verified live 2026-08-02) store `breakdown` as a daily
+ *  financial summary (gross/tax/tips/discounts/net_sales/comps_refunds/..., formatted as
+ *  strings, plus non-numeric metadata like ingested_by/day_still_open) — not the per-category
+ *  Record<string, number> (food/alcohol/beverage/...) writeDay produces. Passing that shape
+ *  straight through would either fail validation (dropping real revenue as "missing") or, if
+ *  iterated as categories, double-count the same total under gross/tax/net_sales as if they
+ *  were separate business lines. Collapsed into one "uncategorized" bucket instead — surfaced
+ *  via the Unmapped row (criterion #4) rather than guessed into a real business line. */
+function normalizeBreakdown(value: unknown, grossAmountCents: number): Record<string, number> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length > 0 && entries.every(([, v]) => typeof v === "number")) {
+      return value as Record<string, number>;
+    }
+  }
+  return { uncategorized: grossAmountCents };
+}
+
 let warnedInvalidRow = false;
 
 /** A row that fails DailySalesRow validation (e.g. a non-numeric value in `breakdown`,
@@ -166,7 +184,7 @@ export async function readDay(locationSlug: string, date: string): Promise<Daily
       for (const d of data) {
         const parsed = DailySalesRow.safeParse({
           locationSlug: d.location_slug, date: d.date, source: d.source,
-          grossAmountCents: d.gross_amount_cents, breakdown: d.breakdown,
+          grossAmountCents: d.gross_amount_cents, breakdown: normalizeBreakdown(d.breakdown, d.gross_amount_cents as number),
         });
         if (parsed.success) valid.push(parsed.data);
         else warnInvalidRow(locationSlug, date, d.source);
@@ -204,7 +222,7 @@ export async function readMonth(locationSlug: string, month: string): Promise<Ma
       for (const d of data) {
         const parsed = DailySalesRow.safeParse({
           locationSlug: d.location_slug, date: d.date, source: d.source,
-          grossAmountCents: d.gross_amount_cents, breakdown: d.breakdown,
+          grossAmountCents: d.gross_amount_cents, breakdown: normalizeBreakdown(d.breakdown, d.gross_amount_cents as number),
         });
         if (!parsed.success) { warnInvalidRow(locationSlug, d.date as string, d.source); continue; }
         // Supabase wins per-source when valid; local disk (seeded above) fills any gap.

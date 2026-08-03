@@ -22,7 +22,7 @@ function lastDayOfMonth(month: string): string {
 async function main() {
   const cfg: RecognitionConfig = { taxIncluded: false, dedupePackages: true };
   const from = "2025-01-01";
-  const to = "2026-08-02";
+  const to = "2026-08-01";
   for (const month of monthsBetween(from, to)) {
     const monthStart = month === from.slice(0, 7) ? from : `${month}-01`;
     const monthEnd = month === to.slice(0, 7) ? to : lastDayOfMonth(month);
