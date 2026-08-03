@@ -10,8 +10,9 @@
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { ingestGotabDay } from "../skills/gotab-ingest/index";
-import { ingestCourtReserveDay } from "../skills/courtreserve-ingest/index";
-import { writeDay, traceRefresh, readTraces, type DailySalesRow, type RefreshStatus } from "../knowledge/index";
+import { ingestCourtReserveDay, ingestCourtReserveDetail, aggregateCourtReserveDetailToDay, type CourtReserveDetailedRow } from "../skills/courtreserve-ingest/index";
+import { writeDay, readDay, traceRefresh, readTraces, type DailySalesRow, type RefreshStatus } from "../knowledge/index";
+import { replaceCourtReserveDetail } from "../knowledge/courtreserve";
 import { repoPath } from "../core/paths";
 
 export type Trigger =
@@ -29,7 +30,9 @@ export type LoopsCfg = {
   locations: Record<string, { active: boolean; gotab_slug?: string }>;
   refresh?: { backfill_months?: number };
   sources: {
-    gotab: { enabled: boolean; mode: "csv" | "api" | "browser" };
+    // "upload" (v2, spec #1 section 2): GoTab has no automated path — data arrives only
+    // through an admin's confirmed /import upload. The daily refresh never auto-ingests it.
+    gotab: { enabled: boolean; mode: "csv" | "api" | "browser" | "upload" };
     courtreserve: { enabled: boolean; mode: "csv" | "api"; locations?: string[] };
   };
 };
@@ -66,6 +69,9 @@ export async function refreshLocationDay(
   // driver from gotab-ingest/browser.ts. Keeping it out of this signature's default wiring
   // is what keeps Playwright out of the Vercel serverless bundle for /api/cron/refresh.
   gotabOpts: { fetchText?: (locationSlug: string, date: string) => Promise<string> } = {},
+  // Only set by tests and future scripts needing an offline/injected CourtReserve API
+  // response — the real daily cron and /api/cron/refresh always go through the live client.
+  courtreserveOpts: { fetchDetailedRows?: (startDate: string, endDate: string) => Promise<CourtReserveDetailedRow[]> } = {},
 ): Promise<LocationRefreshResult> {
   let gotabStatus: RefreshStatus = "missing";
   let courtreserveStatus: RefreshStatus = "missing";
@@ -73,33 +79,65 @@ export async function refreshLocationDay(
   let gotabDayOpen = false;
   const rows: DailySalesRow[] = [];
 
-  try {
-    const day = await ingestGotabDay(locationSlug, date, { mode: cfg.sources.gotab.mode, fetchText: gotabOpts.fetchText });
-    if (day) {
-      gotabStatus = "loaded";
-      rows.push({ locationSlug, date, source: "gotab", grossAmountCents: day.totalGrossCents, breakdown: day.breakdown });
-      // Browser mode only: GoTab keeps a fiscal day "open" (tabs still active) until it's
-      // closed out. Its totals are provisional, so the row is still recorded but the day
-      // must not be presented as a settled, final day (spec criterion #3).
-      if (day.isOpen) {
-        gotabDayOpen = true;
-        error = [error, "gotab: day still open (Open Tabs > 0) — totals are provisional"].filter(Boolean).join("; ");
+  if (cfg.sources.gotab.mode === "upload") {
+    // GoTab has no automated path in v2 (spec section 2) — it only enters through a
+    // confirmed /import upload, which already wrote its row and trace at confirm time.
+    // The daily refresh just reflects whatever's already in the warehouse for this day.
+    const existing = await readDay(locationSlug, date);
+    gotabStatus = existing.some(r => r.source === "gotab") ? "loaded" : "missing";
+  } else {
+    try {
+      const day = await ingestGotabDay(locationSlug, date, { mode: cfg.sources.gotab.mode, fetchText: gotabOpts.fetchText });
+      if (day) {
+        gotabStatus = "loaded";
+        rows.push({ locationSlug, date, source: "gotab", grossAmountCents: day.totalGrossCents, breakdown: day.breakdown });
+        // Browser mode only: GoTab keeps a fiscal day "open" (tabs still active) until it's
+        // closed out. Its totals are provisional, so the row is still recorded but the day
+        // must not be presented as a settled, final day (spec criterion #3).
+        if (day.isOpen) {
+          gotabDayOpen = true;
+          error = [error, "gotab: day still open (Open Tabs > 0) — totals are provisional"].filter(Boolean).join("; ");
+        }
       }
+    } catch (e) {
+      gotabStatus = "error";
+      error = `gotab: ${(e as Error).message}`;
     }
-  } catch (e) {
-    gotabStatus = "error";
-    error = `gotab: ${(e as Error).message}`;
   }
 
-  try {
-    const day = await ingestCourtReserveDay(locationSlug, date, { mode: cfg.sources.courtreserve.mode });
-    if (day) {
-      courtreserveStatus = "loaded";
-      rows.push({ locationSlug, date, source: "courtreserve", grossAmountCents: day.totalGrossCents, breakdown: day.breakdown });
+  if (cfg.sources.courtreserve.mode === "api") {
+    try {
+      const { transactions, reservations, paymentTypeTotals } = await ingestCourtReserveDetail(locationSlug, date, date, {
+        fetchDetailedRows: courtreserveOpts.fetchDetailedRows,
+      });
+      const day = aggregateCourtReserveDetailToDay(locationSlug, date, transactions);
+      if (day) {
+        courtreserveStatus = "loaded";
+        rows.push({ locationSlug, date, source: "courtreserve", grossAmountCents: day.totalGrossCents, breakdown: day.breakdown });
+        // Detail persistence (spec section 10) is additive to the daily_sales aggregate
+        // above — a failure here (e.g. schema not migrated yet) must not flip the day's
+        // complete/incomplete status, only surface in the trace's error field.
+        try {
+          await replaceCourtReserveDetail(locationSlug, date, date, { transactions, reservations, paymentTypeTotals });
+        } catch (e) {
+          error = [error, `courtreserve detail write: ${(e as Error).message}`].filter(Boolean).join("; ");
+        }
+      }
+    } catch (e) {
+      courtreserveStatus = "error";
+      error = [error, `courtreserve: ${(e as Error).message}`].filter(Boolean).join("; ");
     }
-  } catch (e) {
-    courtreserveStatus = "error";
-    error = [error, `courtreserve: ${(e as Error).message}`].filter(Boolean).join("; ");
+  } else {
+    try {
+      const day = await ingestCourtReserveDay(locationSlug, date, { mode: cfg.sources.courtreserve.mode });
+      if (day) {
+        courtreserveStatus = "loaded";
+        rows.push({ locationSlug, date, source: "courtreserve", grossAmountCents: day.totalGrossCents, breakdown: day.breakdown });
+      }
+    } catch (e) {
+      courtreserveStatus = "error";
+      error = [error, `courtreserve: ${(e as Error).message}`].filter(Boolean).join("; ");
+    }
   }
 
   // Persistence failures (e.g. the warehouse schema isn't migrated yet) must never crash

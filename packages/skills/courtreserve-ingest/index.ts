@@ -1,6 +1,8 @@
 /**
  * Skill: courtreserve-ingest (Agent A). Read-only court activity in, normalized rows out.
- * CSV today (mode: csv); API adapter plugs in when COURTRESERVE_API_KEY arrives — same shape out.
+ * CSV upload (mode: csv, the web /import path) or the verified live API (mode: api, spec
+ * #1 section 10) — same CourtReserveDay shape out either way, so metrics/dashboard never
+ * change when the switch flips (config.yaml -> sources.courtreserve.mode).
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -41,12 +43,18 @@ const toCents = (dollars: string) => Math.round(parseFloat(dollars) * 100);
 export async function ingestCourtReserveDay(
   locationSlug: string,
   date: string,
-  opts: { mode?: "csv" | "api"; baseDir?: string } = {},
+  opts: {
+    mode?: "csv" | "api";
+    baseDir?: string;
+    // Test/backfill-script seam — see fetchCourtReserveDetailedRows below. Kept out of the
+    // default wiring so a live call always goes through the real HTTP client.
+    fetchDetailedRows?: (startDate: string, endDate: string) => Promise<CourtReserveDetailedRow[]>;
+  } = {},
 ): Promise<CourtReserveDay | null> {
   const mode = opts.mode ?? "csv";
   if (mode === "api") {
-    if (!process.env.COURTRESERVE_API_KEY) throw new Error("courtreserve-ingest: mode=api requires COURTRESERVE_API_KEY (falls back to csv when absent in config)");
-    throw new Error("courtreserve-ingest: API adapter not wired yet — COURTRESERVE_API_KEY present but no endpoint configured");
+    const { transactions } = await ingestCourtReserveDetail(locationSlug, date, date, { fetchDetailedRows: opts.fetchDetailedRows });
+    return aggregateCourtReserveDetailToDay(locationSlug, date, transactions);
   }
   const path = join(opts.baseDir ?? repoPath("data/imports/courtreserve"), locationSlug, `${date}.csv`);
   if (!existsSync(path)) return null;
@@ -122,4 +130,233 @@ export function parseCourtReserveCsvExport(text: string): CourtReserveExportDay[
     for (const r of lineItems) breakdown[r.courtType] = (breakdown[r.courtType] ?? 0) + r.grossAmountCents;
     return { date, lineItems, totalGrossCents, totalReservations, breakdown };
   });
+}
+
+// ── CourtReserve API — VERIFIED CONTRACT (spec #1 section 10, tested live 2026-08-02) ──
+// Auth: HTTP Basic (COURTRESERVE_API_USER / COURTRESERVE_API_PASS). Org id
+// (COURTRESERVE_ORG_ID) is validated against the response, never sent as a request param.
+// Invariant #3: credentials only ever come from env — never hardcoded, never logged.
+
+const COURTRESERVE_API_BASE = "https://api.courtreserve.com";
+
+/** One row of GET /api/v1/transactions/salessummarydetailed's Data.DetailedRows. Loosely
+ *  typed (nullable/optional beyond what we actually map) — a source field we don't use
+ *  changing shape should never break ingestion of the fields we do. */
+export const CourtReserveDetailedRow = z.object({
+  FeeCategoryName: z.string(),
+  ItemName: z.string(),
+  RevenueCategoryName: z.string().nullish(),
+  RevenueCategoryId: z.union([z.string(), z.number()]).nullish(),
+  GLCode: z.string().nullish(),
+  Amount: z.number(),
+  AmountWithNoTax: z.number(),
+  TaxTotal: z.number(),
+  OrgMemberId: z.union([z.string(), z.number()]).nullish(),
+  OrgMemberFamilyId: z.union([z.string(), z.number()]).nullish(),
+  MemberFullName: z.string().nullish(),
+  MembershipName: z.string().nullish(),
+  Start: z.string().nullish(),
+  End: z.string().nullish(),
+  CourtLabels: z.string().nullish(),
+  CourtIds: z.string().nullish(),
+  ReservationId: z.union([z.string(), z.number()]).nullish(),
+  InstructorNames: z.string().nullish(),
+  PaymentType: z.string().nullish(),
+  TransactionType: z.string().nullish(),
+  TransactionId: z.union([z.string(), z.number()]),
+  TransactionDate: z.string().nullish(),
+  PaidDate: z.string(),
+  FamilyName: z.string().nullish(),
+  ItemCost: z.number().nullish(),
+});
+export type CourtReserveDetailedRow = z.infer<typeof CourtReserveDetailedRow>;
+
+type SalesSummaryDetailedResponse = {
+  ErrorMessage?: string | null;
+  Data: { Start: string; End: string; OrganizationId: number | string; OrganizationName: string; DetailedRows: unknown[] };
+};
+
+export type CourtReserveApiCreds = { user: string; pass: string; orgId: string };
+
+export function courtReserveCredsFromEnv(): CourtReserveApiCreds {
+  const user = process.env.COURTRESERVE_API_USER;
+  const pass = process.env.COURTRESERVE_API_PASS;
+  const orgId = process.env.COURTRESERVE_ORG_ID;
+  if (!user || !pass || !orgId) {
+    throw new Error("courtreserve-ingest: mode=api requires COURTRESERVE_API_USER, COURTRESERVE_API_PASS and COURTRESERVE_ORG_ID");
+  }
+  return { user, pass, orgId };
+}
+
+/**
+ * Live call to the verified salessummarydetailed endpoint. Validates the response actually
+ * belongs to our configured org before returning a single row — a credentials mixup must
+ * surface as a loud error, never silently ingest another organization's data.
+ */
+export async function fetchCourtReserveDetailedRows(
+  startDate: string,
+  endDate: string,
+  creds: CourtReserveApiCreds = courtReserveCredsFromEnv(),
+): Promise<CourtReserveDetailedRow[]> {
+  const url = `${COURTRESERVE_API_BASE}/api/v1/transactions/salessummarydetailed?paymentStartDate=${startDate}&paymentEndDate=${endDate}`;
+  const auth = Buffer.from(`${creds.user}:${creds.pass}`).toString("base64");
+  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" } });
+  if (!res.ok) throw new Error(`courtreserve-ingest: API request failed: ${res.status} ${await res.text()}`);
+
+  const body = (await res.json()) as SalesSummaryDetailedResponse;
+  if (body.ErrorMessage) throw new Error(`courtreserve-ingest: API returned an error: ${body.ErrorMessage}`);
+  if (String(body.Data.OrganizationId) !== String(creds.orgId)) {
+    throw new Error(
+      `courtreserve-ingest: response org id ${body.Data.OrganizationId} does not match configured COURTRESERVE_ORG_ID ${creds.orgId} — refusing to ingest`,
+    );
+  }
+  return body.Data.DetailedRows.map(r => CourtReserveDetailedRow.parse(r));
+}
+
+export type SalesTransactionRow = {
+  locationSlug: string;
+  externalId: string;
+  businessDate: string; // YYYY-MM-DD, date(PaidDate)
+  occurredAt: string; // PaidDate, as-is
+  category: string;
+  itemName: string;
+  grossCents: number;
+  taxCents: number;
+  netCents: number;
+  paymentType: string | null;
+  staffName: string | null;
+  raw: Record<string, unknown>; // the row MINUS MemberFullName/FamilyName (never stored — invariant, spec section 10)
+};
+
+export type CourtReservationRow = {
+  locationSlug: string;
+  reservationId: string;
+  courtLabels: string | null;
+  courtIds: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  businessDate: string;
+};
+
+export type PaymentTypeTotalRow = {
+  locationSlug: string;
+  date: string;
+  paymentType: string;
+  grossCents: number;
+  transactionCount: number;
+};
+
+const toCentsFromAmount = (n: number) => Math.round(n * 100);
+
+/** THE SYSTEM SHALL NEVER store MemberFullName or FamilyName — drop them before persisting.
+ *  OrgMemberId/OrgMemberFamilyId are opaque ids and may be kept. */
+export function mapDetailedRowToTransaction(row: CourtReserveDetailedRow, locationSlug: string): SalesTransactionRow {
+  const { MemberFullName, FamilyName, ...raw } = row;
+  return {
+    locationSlug,
+    externalId: String(row.TransactionId),
+    businessDate: row.PaidDate.slice(0, 10),
+    occurredAt: row.PaidDate,
+    category: row.FeeCategoryName,
+    itemName: row.ItemName,
+    grossCents: toCentsFromAmount(row.Amount),
+    taxCents: toCentsFromAmount(row.TaxTotal),
+    netCents: toCentsFromAmount(row.AmountWithNoTax),
+    paymentType: row.PaymentType ?? null,
+    staffName: row.InstructorNames ?? null,
+    raw,
+  };
+}
+
+/** court_reservations, deduped by ReservationId — a reservation can carry multiple fee
+ *  line items (multiple DetailedRows), but is one row here. Rows with no ReservationId
+ *  (non-court fees) are simply not reservations and are skipped. */
+export function mapDetailedRowsToReservations(rows: CourtReserveDetailedRow[], locationSlug: string): CourtReservationRow[] {
+  const byId = new Map<string, CourtReservationRow>();
+  for (const row of rows) {
+    if (row.ReservationId == null) continue;
+    const reservationId = String(row.ReservationId);
+    if (byId.has(reservationId)) continue;
+    byId.set(reservationId, {
+      locationSlug,
+      reservationId,
+      courtLabels: row.CourtLabels ?? null,
+      courtIds: row.CourtIds ?? null,
+      startAt: row.Start ?? null,
+      endAt: row.End ?? null,
+      businessDate: row.PaidDate.slice(0, 10),
+    });
+  }
+  return [...byId.values()];
+}
+
+/** payment_type_totals per (date, PaymentType). Rows with no PaymentType are grouped under "unknown". */
+export function aggregatePaymentTypeTotals(transactions: SalesTransactionRow[], locationSlug: string): PaymentTypeTotalRow[] {
+  const byKey = new Map<string, PaymentTypeTotalRow>();
+  for (const t of transactions) {
+    const paymentType = t.paymentType ?? "unknown";
+    const key = `${t.businessDate}::${paymentType}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.grossCents += t.grossCents;
+      existing.transactionCount += 1;
+    } else {
+      byKey.set(key, { locationSlug, date: t.businessDate, paymentType, grossCents: t.grossCents, transactionCount: 1 });
+    }
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * Gather step for mode=api: fetch the raw range once and map it into all three detail
+ * shapes (spec section 10). Used by both the daily refresh (single day) and
+ * `npm run backfill:courtreserve` (a month at a time) so the mapping logic lives in one place.
+ */
+export async function ingestCourtReserveDetail(
+  locationSlug: string,
+  startDate: string,
+  endDate: string,
+  opts: { fetchDetailedRows?: (startDate: string, endDate: string) => Promise<CourtReserveDetailedRow[]>; creds?: CourtReserveApiCreds } = {},
+): Promise<{ transactions: SalesTransactionRow[]; reservations: CourtReservationRow[]; paymentTypeTotals: PaymentTypeTotalRow[] }> {
+  const fetcher = opts.fetchDetailedRows ?? ((s: string, e: string) => fetchCourtReserveDetailedRows(s, e, opts.creds));
+  const rawRows = await fetcher(startDate, endDate);
+  const transactions = rawRows.map(r => mapDetailedRowToTransaction(r, locationSlug));
+  const reservations = mapDetailedRowsToReservations(rawRows, locationSlug);
+  const paymentTypeTotals = aggregatePaymentTypeTotals(transactions, locationSlug);
+  return { transactions, reservations, paymentTypeTotals };
+}
+
+/**
+ * Collapses a day's mapped transactions into the same CourtReserveDay shape the CSV path
+ * produces, so metrics/dashboard never change when sources.courtreserve.mode flips to api
+ * (spec #1 section 2). Returns null when nothing came back for that day — never fabricated
+ * as zero (mirrors the CSV path's "missing file -> null").
+ */
+export function aggregateCourtReserveDetailToDay(locationSlug: string, date: string, transactions: SalesTransactionRow[]): CourtReserveDay | null {
+  const dayTransactions = transactions.filter(t => t.businessDate === date);
+  if (dayTransactions.length === 0) return null;
+
+  const reservationIdOf = (t: SalesTransactionRow): string | null => {
+    const id = t.raw.ReservationId;
+    return id == null ? null : String(id);
+  };
+
+  const byCategory = new Map<string, { grossAmountCents: number; reservationIds: Set<string> }>();
+  for (const t of dayTransactions) {
+    const existing = byCategory.get(t.category) ?? { grossAmountCents: 0, reservationIds: new Set<string>() };
+    existing.grossAmountCents += t.grossCents;
+    const rid = reservationIdOf(t);
+    if (rid) existing.reservationIds.add(rid);
+    byCategory.set(t.category, existing);
+  }
+
+  const lineItems: CourtReserveLineItem[] = [...byCategory.entries()].map(([courtType, v]) => ({
+    courtType, grossAmountCents: v.grossAmountCents, reservationCount: v.reservationIds.size,
+  }));
+  const totalGrossCents = dayTransactions.reduce((a, t) => a + t.grossCents, 0);
+  const totalReservations = new Set(dayTransactions.map(reservationIdOf).filter((id): id is string => id != null)).size;
+  const breakdown: Record<string, number> = {};
+  for (const [courtType, v] of byCategory) breakdown[courtType] = v.grossAmountCents;
+
+  return { locationSlug, date, lineItems, totalGrossCents, totalReservations, breakdown };
 }
