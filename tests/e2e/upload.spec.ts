@@ -1,5 +1,21 @@
 import { test, expect, type Page } from "@playwright/test";
 import { ensureAdmin } from "../../packages/knowledge/admins";
+import { readDay } from "../../packages/knowledge/index";
+
+const ORLANDO = "orlando";
+
+/** The live warehouse write (via the confirm API) can lag briefly behind a read
+ *  (network/replication), and the dashboard only fetches once on mount — poll until the
+ *  just-confirmed amount is actually readable back, rather than let the UI race a write
+ *  that hasn't settled yet. */
+async function waitForGotabAmount(date: string, expectedCents: number): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    const rows = await readDay(ORLANDO, date);
+    if (rows.find(r => r.source === "gotab")?.grossAmountCents === expectedCents) return;
+    await new Promise(r => setTimeout(r, 250));
+  }
+  throw new Error(`gotab amount ${expectedCents} for ${date} never became readable`);
+}
 
 /** Acceptance test (spec #1 v2, section 6, "upload flow"): upload -> preview -> confirm ->
  *  value appears on the dashboard; malformed file rejected with a message; re-upload
@@ -85,6 +101,7 @@ test("upload -> preview -> confirm -> value appears on the dashboard; malformed 
 
   await page.getByRole("button", { name: /confirm.*write/i }).click();
   await expect(page.getByText(new RegExp(`Saved 1 day\\(s\\): ${UPLOAD_DATE}`))).toBeVisible();
+  await waitForGotabAmount(UPLOAD_DATE, 10000);
 
   // Value appears on the manager's dashboard within the flow — no terminal involved.
   await page.goto("/login");
@@ -114,6 +131,7 @@ test("upload -> preview -> confirm -> value appears on the dashboard; malformed 
 
   await page.getByRole("button", { name: /confirm.*write/i }).click();
   await expect(page.getByText(new RegExp(`Replaced existing data for: ${UPLOAD_DATE}`))).toBeVisible();
+  await waitForGotabAmount(UPLOAD_DATE, 25000);
 
   await page.goto(`/dashboard/orlando?period=day&date=${UPLOAD_DATE}`);
   await expect(page.getByText("GoTab (F&B): $250.00")).toBeVisible();
