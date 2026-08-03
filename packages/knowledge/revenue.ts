@@ -73,6 +73,27 @@ function revenuePath(locationSlug: string): string {
   return localFile(join(locationSlug, "revenue_recognized.json"));
 }
 
+/** The live table's unique constraint (verified live 2026-08-02, "rev_rec_natural_key") is
+ *  (location_slug, source, period_month, group_name, item_name, business_date) — one row per
+ *  item per day, not per transaction, so two same-day transactions for the same category/item
+ *  (e.g. two guests both booking "Drop-In Play") must be summed into a single row before
+ *  insert rather than violating the constraint as separate rows. */
+function aggregateForNaturalKey(rows: RecognizedRevenueRow[]): RecognizedRevenueRow[] {
+  const byKey = new Map<string, RecognizedRevenueRow>();
+  for (const r of rows) {
+    const key = `${r.locationSlug}::${r.source}::${r.periodMonth}::${r.groupName}::${r.itemName}::${r.businessDate}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.amountCents += r.amountCents;
+      existing.taxCents += r.taxCents;
+      existing.netCents += r.netCents;
+    } else {
+      byKey.set(key, { ...r });
+    }
+  }
+  return [...byKey.values()];
+}
+
 /** Replace every revenue_recognized row for this location in [fromDate, toDate] — same
  *  delete-then-insert idempotency as replaceCourtReserveDetail. */
 export async function replaceRecognizedRevenue(
@@ -84,7 +105,8 @@ export async function replaceRecognizedRevenue(
   if (supabaseConfigured()) {
     try {
       await supabaseRest(`revenue_recognized?location_slug=eq.${locationSlug}&business_date=gte.${fromDate}&business_date=lte.${toDate}`, { method: "DELETE" });
-      if (rows.length) {
+      const aggregated = aggregateForNaturalKey(rows);
+      if (aggregated.length) {
         // The live table (verified live 2026-08-02) has no external_id/transaction_type/
         // payment_type columns — narrower than the migration file describes. external_id
         // isn't needed (replace is a delete-by-date-range, not an upsert-by-key); transaction
@@ -93,7 +115,7 @@ export async function replaceRecognizedRevenue(
         await supabaseRest("revenue_recognized", {
           method: "POST",
           headers: { Prefer: "return=minimal" },
-          body: JSON.stringify(rows.map(r => ({
+          body: JSON.stringify(aggregated.map(r => ({
             location_slug: r.locationSlug, source: r.source,
             // period_month is a `date` column on the live table (not text, as the migration
             // file has it) — needs a full YYYY-MM-DD, so the first of the month.
