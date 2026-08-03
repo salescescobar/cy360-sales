@@ -191,6 +191,22 @@ async function main() {
     rmSync(`${loopDir}/costs.jsonl`, { force: true });
   });
 
+  // TEMP verification (removed before commit): perf + size-cap fix for hostile_inputs failure
+  await t("TEMP: 50k rows on one date parses fast (no O(n^2) hang)", () => {
+    const rows = ["date,category,gross_amount,transaction_count"];
+    for (let i = 0; i < 50000; i++) rows.push(`2023-05-06,cat${i % 20},10.00,1`);
+    const start = Date.now();
+    const days = parseGotabCsvExport(rows.join("\n"));
+    const ms = Date.now() - start;
+    assert(ms < 2000, `took ${ms}ms, expected well under 2s`);
+    assert(days.length === 1 && days[0].totalGrossCents === 50000000, JSON.stringify(days[0]).slice(0, 200));
+  });
+  await t("TEMP: oversized upload rejected with a specific message", async () => {
+    const { checkUploadSize } = await import("../packages/skills/upload-ingest/index");
+    try { checkUploadSize(10.09 * 1024 * 1024, "judge-10mb.csv"); throw new Error("did not throw"); }
+    catch (e) { assert((e as Error).message.includes("exceeds") && (e as Error).message.includes("judge-10mb.csv"), (e as Error).message); }
+  });
+
   rmSync(repoPath(".local-storage", "warehouse", testLocation), { recursive: true, force: true });
 
   console.log(`\n  ${pass} passed · ${fail} failed\n`);
