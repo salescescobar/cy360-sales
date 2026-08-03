@@ -23,7 +23,8 @@
     "seed:admin": "tsx scripts/seed-admin.ts",
     "cost:report": "tsx scripts/cost-report.ts",
     "selftest": "tsx scripts/selftest.ts",
-    "models:check": "tsx scripts/check-models.ts"
+    "models:check": "tsx scripts/check-models.ts",
+    "security": "tsx scripts/security-check.ts"
   },
   "dependencies": {
     "yaml": "^2.5.0",

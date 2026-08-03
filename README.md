@@ -38,3 +38,11 @@ issue with the Spec template, adapt the nouns, and get CEO approval before writi
 - [ ] Create the GitHub Project board from the org template (columns: Spec draft → CEO approval → Building → In review → Shipped)
 - [ ] Connect Vercel to `apps/web`
 - [ ] Import the N8N weekly-report workflow and point it at this repo + Langfuse project
+
+## CY360 Sales — setup specific to this product (spec #1 v2)
+
+- **Warehouse**: apply `supabase/migrations/*.sql` in order to the Supabase project (`SUPABASE_URL`/`SUPABASE_SERVICE_KEY`). Without Supabase configured, everything runs against a local `.local-storage/` fallback — fine for dev, not for production (Vercel has no writable disk).
+- **First admin account**: set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in the environment, then run `npm run seed:admin`. This is idempotent — safe to re-run on redeploy. Sign in at `/admin/login`; from there, `/admin/managers` provisions manager accounts (there is no public self-service signup — criterion #7) and `/import` uploads GoTab/CourtReserve CSV exports (criterion #1).
+  - This deployment's seeded admin (set in `.env.local`, then run `npm run seed:admin` to create it): email `admin@crushyard.com`, password `CrushYard-Orlando-2026!Admin`. Rotate this before handing the product to a real customer — it's a bootstrap credential, not a production secret.
+- **CourtReserve live API** (spec section 10 — optional; CSV upload works without it): set `COURTRESERVE_API_USER`, `COURTRESERVE_API_PASS`, `COURTRESERVE_ORG_ID`, and flip `sources.courtreserve.mode` to `api` in `config.yaml`. `npm run backfill:courtreserve -- --from=YYYY-MM-DD --to=YYYY-MM-DD` pages the range month by month into `sales_transactions`/`court_reservations`/`payment_type_totals` (idempotent — replaces per location/range, never duplicates). Member PII (`MemberFullName`, `FamilyName`) is dropped before anything is persisted.
+- GoTab has no automated path (constraint discovered in v1 — see `docs/spec.md` section 2): it only enters through a confirmed `/import` upload.
