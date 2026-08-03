@@ -107,6 +107,11 @@ select * from (values
   ('gotab', 'swag', null, 'swag', 10),
   ('gotab', 'merchandise', null, 'swag', 10),
   ('gotab', 'arcade', null, 'arcade', 10),
-  ('gotab', 'sponsorship', null, 'sponsorships', 10)
+  ('gotab', 'sponsorship', null, 'sponsorships', 10),
+  -- GoTab's real daily-summary ingestion has no per-category split (see
+  -- packages/knowledge/index.ts::normalizeBreakdown) — a single "uncategorized" bucket per
+  -- day. Lowest priority so a real category breakdown (rows above) always wins when one
+  -- exists; still admin-editable like any other rule (criterion #4).
+  ('gotab', 'uncategorized', null, 'food_beverage', 50)
 ) as seed(source, match_group, match_item, business_line, priority)
 where not exists (select 1 from business_line_map);

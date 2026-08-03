@@ -166,6 +166,12 @@ async function main() {
     assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "gotab", "food", "food") === "food_beverage", "food");
     assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "gotab", "arcade", "arcade") === "arcade", "arcade");
   });
+  await t("business-lines: GoTab's real daily-summary shape (uncategorized) resolves to food_beverage, not Unmapped (business_lines)", () => {
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "gotab", "uncategorized", "uncategorized") === "food_beverage", "uncategorized should default to food_beverage");
+  });
+  await t("business-lines: a real CourtReserve group name resolves even with stray whitespace (business_lines)", () => {
+    assert(resolveBusinessLine(DEFAULT_BUSINESS_LINE_RULES, "courtreserve", " Reservation ", "Indoor Pickleball") === "pickleball", "trimmed exact match should still resolve");
+  });
 
   // 7 · courtreserve-ingest: revenuerecognition/list mapping — PII dropped, config-driven
   // tax basis, dedupe_packages collapses a purchase+usage pair sharing (FeeId, RelationId)
@@ -269,6 +275,43 @@ async function main() {
     assert(report.alerts.some(a => a.businessLine === "memberships" && a.direction === "up" && a.comparison === "prior_month"), JSON.stringify(report.alerts));
     assert(!report.alerts.some(a => (a.businessLine as string) === "gross_revenues" || (a.businessLine as string) === "total"), "Gross/Total must never alert");
   });
+  await t("growth-report: singleDay mode isolates one calendar day, never accumulates from day 1 (drilldown_3_clicks/reads_supabase)", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 15, singleDay: true, currentPhase: "complete",
+      current: { label: "2026-08", courtRows: [rowsFor("2026-08-01", "Reservation", 999999), rowsFor("2026-08-15", "Reservation", 5000)], gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2026-07", courtRows: [rowsFor("2026-07-15", "Reservation", 4000)], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-08", courtRows: [rowsFor("2025-08-15", "Reservation", 3000)], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2026-08-15",
+    });
+    const pickleball = report.rows.find(r => r.businessLine === "pickleball")!;
+    assert(pickleball.current === 5000, `singleDay must isolate day 15 only, excluding day 1's 999999, got ${pickleball.current}`);
+    assert(pickleball.priorMonth === 4000 && pickleball.lastYear === 3000, JSON.stringify(pickleball));
+  });
+  await t("growth-report: a fully future period suppresses pct/alerts and states it hasn't started (incomplete_labelled)", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 0, currentPhase: "future",
+      current: { label: "2027-01", courtRows: [], gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2026-12", courtRows: [rowsFor("2026-12-01", "Reservation", 5000)], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2026-01", courtRows: [rowsFor("2026-01-01", "Reservation", 4000)], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2027-01-01",
+    });
+    const total = report.rows.find(r => r.businessLine === "total")!;
+    assert(total.current === 0 && total.vsPriorMonthPct === null && total.vsLastYearPct === null, `future period must never fabricate a pct, got ${JSON.stringify(total)}`);
+    assert(report.alerts.length === 0, `future period must never alert, got ${JSON.stringify(report.alerts)}`);
+    assert(report.missing.current.some(m => /hasn't started/i.test(m)), `expected a "hasn't started" message, got ${JSON.stringify(report.missing.current)}`);
+  });
+  await t("growth-report: an in-progress month states elapsed/remaining days but still compares normally (incomplete_labelled)", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 3, currentPhase: "in_progress",
+      current: { label: "2026-08", courtRows: [rowsFor("2026-08-01", "Reservation", 6000)], gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2026-07", courtRows: [rowsFor("2026-07-01", "Reservation", 3000)], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-08", courtRows: [], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2026-08-03",
+    });
+    const pickleball = report.rows.find(r => r.businessLine === "pickleball")!;
+    assert(pickleball.vsPriorMonthPct === 100, `in-progress period must still compare normally, got ${pickleball.vsPriorMonthPct}`);
+    assert(report.missing.current.some(m => /in progress/i.test(m) && /remaining/i.test(m)), `expected an in-progress/remaining-days message, got ${JSON.stringify(report.missing.current)}`);
+  });
 
   const { buildHourlyCurve } = await import("../packages/skills/growth-report/index");
   await t("growth-report: hourly curve buckets recognized rows by StartDateTime's hour (criterion #7)", () => {
@@ -314,6 +357,16 @@ async function main() {
     const first = await tryRecordAlert({ locationSlug: testLocation, businessLine: "pickleball", sentOn: "2026-08-01", direction: "up", comparison: "prior_month", pct: 25, message: "test" });
     const second = await tryRecordAlert({ locationSlug: testLocation, businessLine: "pickleball", sentOn: "2026-08-01", direction: "up", comparison: "prior_month", pct: 25, message: "test" });
     assert(first === true && second === false, `expected [true, false], got [${first}, ${second}]`);
+  });
+
+  // 10b · lib/format: spec section 8 is literal — "em dash for absent values (never $0.00)"
+  // (h_zero_vs_dash)
+  const { fmtUsd } = await import("../apps/web/app/lib/format");
+  await t("lib/format: fmtUsd never renders $0.00 — zero and absent both render as an em dash (h_zero_vs_dash)", () => {
+    assert(fmtUsd(0) === "—", `expected an em dash for zero, got ${fmtUsd(0)}`);
+    assert(fmtUsd(null) === "—", `expected an em dash for null, got ${fmtUsd(null)}`);
+    assert(fmtUsd(150000) === "$1,500.00", `expected a real amount to still format normally, got ${fmtUsd(150000)}`);
+    assert(fmtUsd(-150000) === "($1,500.00)", `expected a negative amount in parentheses, got ${fmtUsd(-150000)}`);
   });
 
   // 11 · checkpoint fails closed (shared infra — the hard gate any future sensitive action builds on)
