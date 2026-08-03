@@ -70,7 +70,15 @@ export type PeriodTotals = {
 function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: BusinessLineRule[]): PeriodTotals {
   const effectiveDays = Math.min(elapsedDays, daysInMonth(period.label));
   const byLine = new Map<string, number>();
-  const bump = (key: string, cents: number) => byLine.set(key, (byLine.get(key) ?? 0) + cents);
+  let discountCents = 0;
+  // A negative-amount line item (a discount/refund) is pulled into its own bucket at the
+  // ROW level, before it ever reaches a business line — netting it into pickleball/food/etc.
+  // first would hide it inside that line's total instead of surfacing it as its own row
+  // (spec section 8: "Discounts" sits between Gross Revenues and Total).
+  const bump = (key: string, cents: number) => {
+    if (cents < 0) { discountCents += cents; return; }
+    byLine.set(key, (byLine.get(key) ?? 0) + cents);
+  };
 
   for (const row of period.courtRows) {
     if (dayOfMonth(row.businessDate) > effectiveDays) continue;
@@ -94,18 +102,10 @@ function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: Busine
     missing.push(`GoTab: ${missingGotabDates.length} day(s) missing or still open (${missingGotabDates.join(", ")}) — excluded from totals`);
   }
 
-  const lines: LineAmount[] = BUSINESS_LINE_ORDER.map(bl => ({ businessLine: bl, label: BUSINESS_LINE_LABELS[bl], amountCents: byLine.get(bl) ?? 0 }));
+  const grossLines: LineAmount[] = BUSINESS_LINE_ORDER.map(bl => ({ businessLine: bl, label: BUSINESS_LINE_LABELS[bl], amountCents: byLine.get(bl) ?? 0 }));
   const unmappedCents = byLine.get(UNMAPPED) ?? 0;
-  lines.push({ businessLine: UNMAPPED, label: "Unmapped", amountCents: unmappedCents });
+  grossLines.push({ businessLine: UNMAPPED, label: "Unmapped", amountCents: unmappedCents });
 
-  // Discounts: any negative-amount line item, across every business line AND unmapped —
-  // pulled out into its own row rather than left netted invisibly inside a business line
-  // (spec section 8: "Discounts" is its own row between Gross Revenues and Total).
-  let discountCents = 0;
-  const grossLines: LineAmount[] = lines.map(l => {
-    if (l.amountCents < 0) { discountCents += l.amountCents; return { ...l, amountCents: 0 }; }
-    return l;
-  });
   const grossRevenuesCents = grossLines.reduce((a, l) => a + l.amountCents, 0);
   const totalCents = grossRevenuesCents + discountCents;
 
