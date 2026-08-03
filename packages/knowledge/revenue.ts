@@ -85,14 +85,19 @@ export async function replaceRecognizedRevenue(
     try {
       await supabaseRest(`revenue_recognized?location_slug=eq.${locationSlug}&business_date=gte.${fromDate}&business_date=lte.${toDate}`, { method: "DELETE" });
       if (rows.length) {
+        // The live table (verified live 2026-08-02) has no external_id/transaction_type/
+        // payment_type columns — narrower than the migration file describes. external_id
+        // isn't needed (replace is a delete-by-date-range, not an upsert-by-key); transaction
+        // type/payment type still travel inside `raw` (the untouched source row) and are
+        // reconstructed from there on read instead of a dedicated column.
         await supabaseRest("revenue_recognized", {
           method: "POST",
           headers: { Prefer: "return=minimal" },
           body: JSON.stringify(rows.map(r => ({
-            location_slug: r.locationSlug, source: r.source, external_id: r.externalId,
+            location_slug: r.locationSlug, source: r.source,
             period_month: r.periodMonth, business_date: r.businessDate, group_name: r.groupName,
             item_name: r.itemName, amount_cents: r.amountCents, tax_cents: r.taxCents, net_cents: r.netCents,
-            transaction_type: r.transactionType, payment_type: r.paymentType, recognized_on: r.recognizedOn, raw: r.raw,
+            recognized_on: r.recognizedOn, raw: r.raw,
           }))),
         });
       }
@@ -114,14 +119,17 @@ export async function readRecognizedRevenue(locationSlug: string, fromDate: stri
     try {
       const res = await supabaseRest(`revenue_recognized?location_slug=eq.${locationSlug}&business_date=gte.${fromDate}&business_date=lte.${toDate}&order=business_date.asc`);
       const data = (await res.json()) as Array<Record<string, unknown>>;
-      return data.map(d => ({
-        locationSlug: d.location_slug as string, source: "courtreserve" as const, externalId: d.external_id as string,
-        businessDate: d.business_date as string, periodMonth: d.period_month as string, groupName: d.group_name as string,
-        itemName: d.item_name as string, amountCents: d.amount_cents as number, taxCents: d.tax_cents as number,
-        netCents: d.net_cents as number, transactionType: (d.transaction_type as string | null) ?? null,
-        paymentType: (d.payment_type as string | null) ?? null, feeId: null, paymentId: null, relationId: null,
-        recognizedOn: (d.recognized_on as string | null) ?? null, raw: (d.raw as Record<string, unknown>) ?? {},
-      }));
+      return data.map(d => {
+        const raw = (d.raw as Record<string, unknown>) ?? {};
+        return {
+          locationSlug: d.location_slug as string, source: "courtreserve" as const, externalId: "",
+          businessDate: d.business_date as string, periodMonth: d.period_month as string, groupName: d.group_name as string,
+          itemName: d.item_name as string, amountCents: d.amount_cents as number, taxCents: d.tax_cents as number,
+          netCents: d.net_cents as number, transactionType: (raw.TransactionType as string | null) ?? null,
+          paymentType: (raw.PaymentType as string | null) ?? null, feeId: null, paymentId: null, relationId: null,
+          recognizedOn: (d.recognized_on as string | null) ?? null, raw,
+        };
+      });
     } catch (e) {
       if (!(e instanceof SchemaNotMigratedError)) throw e;
       warnSchemaNotMigrated();
