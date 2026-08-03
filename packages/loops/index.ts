@@ -202,7 +202,10 @@ export async function runDailySalesRefresh(date: string, cfg: LoopsCfg = loadCfg
   return results;
 }
 
-async function buildPeriodInput(locationSlug: string, month: string): Promise<PeriodInput> {
+/** Loads one calendar month's recognized-revenue + GoTab days for growth-report's
+ *  PeriodInput shape — shared by the alert pipeline here and the /api/growth-report route
+ *  (apps/web) so both compute from exactly the same warehouse reads. */
+export async function buildPeriodInput(locationSlug: string, month: string): Promise<PeriodInput> {
   const from = `${month}-01`;
   const to = lastDayOfMonth(month);
   let courtRows: PeriodInput["courtRows"] = [];

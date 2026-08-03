@@ -270,6 +270,15 @@ async function main() {
     assert(!report.alerts.some(a => (a.businessLine as string) === "gross_revenues" || (a.businessLine as string) === "total"), "Gross/Total must never alert");
   });
 
+  const { buildHourlyCurve } = await import("../packages/skills/growth-report/index");
+  await t("growth-report: hourly curve buckets recognized rows by StartDateTime's hour (criterion #7)", () => {
+    const withHour = (date: string, hour: string, amountCents: number) => ({ ...rowsFor(date, "Reservation", amountCents), raw: { StartDateTime: `${date}T${hour}:00:00` } });
+    const curve = buildHourlyCurve([withHour("2026-08-01", "09", 5000), withHour("2026-08-01", "09", 2000), withHour("2026-08-01", "14", 3000), withHour("2026-08-02", "09", 999999)], "2026-08-01");
+    assert(curve.length === 2, JSON.stringify(curve));
+    assert(curve[0].hour === 9 && curve[0].amountCents === 7000, JSON.stringify(curve[0]));
+    assert(curve[1].hour === 14 && curve[1].amountCents === 3000, JSON.stringify(curve[1]));
+  });
+
   // 9 · reconciliation: recognized vs payment-basis per FeeCategory/TransactionType, with delta (spec section 4)
   const { computeReconciliation } = await import("../packages/skills/reconciliation/index");
   await t("reconciliation: groups by FeeCategory + TransactionType and computes the delta without picking a winner", () => {

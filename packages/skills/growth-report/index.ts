@@ -121,6 +121,28 @@ function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: Busine
   };
 }
 
+export type HourlyBucket = { hour: number; amountCents: number };
+
+/**
+ * Criterion #7: the day view's hourly curve, "where available." CourtReserve's
+ * revenuerecognition/list rows keep StartDateTime in `raw` (nothing PII there, so it's
+ * never stripped) — that's real granularity, not fabricated. GoTab's daily-summary
+ * ingestion has no time-of-day field at all, so it simply isn't represented here; the
+ * caller must say so rather than implying a flat/zero curve.
+ */
+export function buildHourlyCurve(courtRows: RecognizedRevenueRow[], date: string): HourlyBucket[] {
+  const byHour = new Map<number, number>();
+  for (const row of courtRows) {
+    if (row.businessDate !== date) continue;
+    const start = row.raw.StartDateTime;
+    if (typeof start !== "string" || start.length < 13) continue;
+    const hour = Number(start.slice(11, 13));
+    if (!Number.isFinite(hour)) continue;
+    byHour.set(hour, (byHour.get(hour) ?? 0) + row.amountCents);
+  }
+  return [...byHour.entries()].sort(([a], [b]) => a - b).map(([hour, amountCents]) => ({ hour, amountCents }));
+}
+
 export type Comparison = { comparisonKey: "prior_month" | "same_month_last_year"; label: string; pct: number | null };
 
 export type ReportLineRow = {
@@ -148,6 +170,54 @@ export type GrowthReport = {
 function pctChange(current: number, compare: number): number | null {
   if (compare === 0) return null; // never divide by zero into a fabricated percentage
   return +(((current - compare) / Math.abs(compare)) * 100).toFixed(1);
+}
+
+export type DrilldownTransaction = { date: string; amountCents: number; source: "gotab" | "courtreserve"; transactionType?: string | null; paymentType?: string | null };
+export type DrilldownItem = { item: string; amountCents: number; transactions: DrilldownTransaction[] };
+export type DrilldownGroup = { group: string; amountCents: number; items: DrilldownItem[] };
+
+/**
+ * Business line -> group -> item -> transactions (criterion #3: "any figure is traceable
+ * in at most three clicks"). GoTab has no itemized transaction below its daily category
+ * total, so a GoTab "transaction" here IS that day's category total — the finest grain the
+ * source actually gives us, never a fabricated split.
+ */
+export function buildDrilldown(period: PeriodInput, elapsedDays: number, rules: BusinessLineRule[]): Record<string, DrilldownGroup[]> {
+  const effectiveDays = Math.min(elapsedDays, daysInMonth(period.label));
+  const byLineGroupItem = new Map<string, Map<string, Map<string, DrilldownTransaction[]>>>();
+
+  const record = (line: string, group: string, item: string, tx: DrilldownTransaction) => {
+    if (!byLineGroupItem.has(line)) byLineGroupItem.set(line, new Map());
+    const byGroup = byLineGroupItem.get(line)!;
+    if (!byGroup.has(group)) byGroup.set(group, new Map());
+    const byItem = byGroup.get(group)!;
+    if (!byItem.has(item)) byItem.set(item, []);
+    byItem.get(item)!.push(tx);
+  };
+
+  for (const row of period.courtRows) {
+    if (dayOfMonth(row.businessDate) > effectiveDays) continue;
+    const line = resolveBusinessLine(rules, "courtreserve", row.groupName, row.itemName);
+    record(line, row.groupName, row.itemName, { date: row.businessDate, amountCents: row.amountCents, source: "courtreserve", transactionType: row.transactionType, paymentType: row.paymentType });
+  }
+  for (const day of period.gotabDays) {
+    if (dayOfMonth(day.date) > effectiveDays || day.status !== "complete") continue;
+    for (const [category, cents] of Object.entries(day.breakdown)) {
+      const line = resolveBusinessLine(rules, "gotab", category, category);
+      record(line, category, category, { date: day.date, amountCents: cents, source: "gotab" });
+    }
+  }
+
+  const result: Record<string, DrilldownGroup[]> = {};
+  for (const [line, byGroup] of byLineGroupItem) {
+    result[line] = [...byGroup.entries()].map(([group, byItem]) => {
+      const items: DrilldownItem[] = [...byItem.entries()].map(([item, transactions]) => ({
+        item, amountCents: transactions.reduce((a, t) => a + t.amountCents, 0), transactions,
+      }));
+      return { group, amountCents: items.reduce((a, i) => a + i.amountCents, 0), items };
+    });
+  }
+  return result;
 }
 
 export function computeGrowthReport(input: GrowthReportInput): GrowthReport {

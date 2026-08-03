@@ -12,15 +12,27 @@ loadLocalEnv();
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { repoPath } from "../packages/core/paths";
-import { ingestCourtReserveDetail } from "../packages/skills/courtreserve-ingest/index";
+import { ingestCourtReserveDetail, ingestRecognizedRevenue, type RecognitionConfig } from "../packages/skills/courtreserve-ingest/index";
 import { replaceCourtReserveDetail } from "../packages/knowledge/courtreserve";
+import { replaceRecognizedRevenue } from "../packages/knowledge/revenue";
 import { recordImportUpload } from "../packages/knowledge/index";
 
-type Cfg = { sources: { courtreserve: { locations?: string[] } } };
+type Cfg = {
+  sources: { courtreserve: { locations?: string[] } };
+  report: { recognition: { tax_included: boolean; dedupe_packages: boolean } };
+};
+
+function loadCfg(): Cfg {
+  return parse(readFileSync(repoPath("config.yaml"), "utf8")) as Cfg;
+}
 
 function loadCourtReserveLocations(): string[] {
-  const cfg = parse(readFileSync(repoPath("config.yaml"), "utf8")) as Cfg;
-  return cfg.sources.courtreserve.locations ?? [];
+  return loadCfg().sources.courtreserve.locations ?? [];
+}
+
+function loadRecognitionCfg(): RecognitionConfig {
+  const { tax_included, dedupe_packages } = loadCfg().report.recognition;
+  return { taxIncluded: tax_included, dedupePackages: dedupe_packages };
 }
 
 function monthsBetween(from: string, to: string): string[] {
@@ -50,6 +62,7 @@ async function main() {
   const from = fromArg;
   const to = toArg ?? new Date().toISOString().slice(0, 10);
   const locations = loadCourtReserveLocations();
+  const recognitionCfg = loadRecognitionCfg();
 
   console.log(`\n▶ CourtReserve API backfill — ${from} .. ${to}\n`);
   if (locations.length === 0) {
@@ -67,6 +80,12 @@ async function main() {
       // than appending, so re-running the same --from/--to never duplicates rows.
       await replaceCourtReserveDetail(locationSlug, monthStart, monthEnd, { transactions, reservations, paymentTypeTotals });
 
+      // Recognized revenue (spec #1 v5 section 3 — THE report source) is a separate API call
+      // (service-date basis, not payment-date) — additive to the detail write above, same
+      // idempotent delete-then-insert per (location, range).
+      const recognized = await ingestRecognizedRevenue(locationSlug, monthStart, monthEnd, recognitionCfg);
+      await replaceRecognizedRevenue(locationSlug, monthStart, monthEnd, recognized);
+
       // One imports audit row per month processed, even when a month has zero transactions
       // (invariant #4's "no ingestion without a trace", extended to the API path — there's
       // no raw file here, so storagePath records the API range that was fetched instead).
@@ -76,7 +95,7 @@ async function main() {
         originalFilename: `courtreserve-api-backfill-${month}.json`,
       });
 
-      console.log(`  ${locationSlug} ${month}: ${transactions.length} transaction(s), ${reservations.length} reservation(s)`);
+      console.log(`  ${locationSlug} ${month}: ${transactions.length} transaction(s), ${reservations.length} reservation(s), ${recognized.length} recognized row(s)`);
     }
   }
   console.log("\n  Done.\n");

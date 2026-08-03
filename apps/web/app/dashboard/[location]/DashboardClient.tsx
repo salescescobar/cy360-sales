@@ -1,26 +1,31 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type CSSProperties } from "react";
+import { theme } from "../../lib/theme";
+import { fmtUsd, fmtPct, trafficDirection } from "../../lib/format";
 
-type DailyMetrics = {
-  date: string;
-  status: "complete" | "incomplete";
-  gotabGrossCents: number;
-  courtreserveGrossCents: number;
-  totalGrossCents: number;
-  breakdown: Record<string, number>;
+type LineRow = {
+  businessLine: string;
+  label: string;
+  current: number;
+  priorMonth: number;
+  lastYear: number;
+  vsPriorMonthPct: number | null;
+  vsLastYearPct: number | null;
 };
-type MonthlyMetrics = {
-  month: string;
-  totalGrossCents: number;
-  gotabGrossCents: number;
-  courtreserveGrossCents: number;
-  completeDays: number;
-  incompleteDays: number;
-  breakdown: Record<string, number>;
-  priorPeriod: { totalGrossCents: number; pctChange: number | null; label: string } | null;
+type GrowthReport = {
+  locationSlug: string;
+  recognitionThroughDate: string;
+  rows: LineRow[];
+  daysRow: { current: number; priorMonth: number; lastYear: number };
+  comparisonLabels: { priorMonth: string; lastYear: string };
+  missing: { current: string[]; priorMonth: string[]; lastYear: string[] };
+  alerts: Array<{ businessLine: string; label: string; comparison: string; direction: "up" | "down"; pct: number }>;
 };
+type DrilldownTx = { date: string; amountCents: number; source: "gotab" | "courtreserve"; transactionType?: string | null; paymentType?: string | null };
+type DrilldownItem = { item: string; amountCents: number; transactions: DrilldownTx[] };
+type DrilldownGroup = { group: string; amountCents: number; items: DrilldownItem[] };
 
-const fmtUsd = (cents: number) => (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+const THRESHOLDS = { green_pct: 5, red_pct: -5 }; // display only — the server (config.yaml) is authoritative
 
 function yesterdayIso(): string {
   const d = new Date();
@@ -30,18 +35,67 @@ function yesterdayIso(): string {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_RE = /^\d{4}-\d{2}$/;
+const ROLLUP_LINES = new Set(["gross_revenues", "discounts", "total"]);
+
+function TrafficDot({ pct }: { pct: number | null }) {
+  const dir = trafficDirection(pct, THRESHOLDS);
+  const color = dir === "up" ? theme.up : dir === "down" ? theme.down : theme.flat;
+  return <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: color, marginRight: 6 }} />;
+}
+
+function ComparisonCell({ amount, pct }: { amount: number; pct: number | null }) {
+  return (
+    <td style={{ textAlign: "right", padding: "10px 8px", fontFeatureSettings: theme.numericFeatures, whiteSpace: "nowrap" }}>
+      <span>{fmtUsd(amount)}</span>{" "}
+      <span style={{ color: pct == null ? theme.textSecondary : trafficDirection(pct, THRESHOLDS) === "up" ? theme.up : trafficDirection(pct, THRESHOLDS) === "down" ? theme.down : theme.flat, fontSize: 13 }}>
+        <TrafficDot pct={pct} />{fmtPct(pct)}
+      </span>
+    </td>
+  );
+}
+
+function DrilldownRows({ groups }: { groups: DrilldownGroup[] }) {
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [openItem, setOpenItem] = useState<string | null>(null);
+  if (groups.length === 0) return <tr><td colSpan={4} style={{ padding: "8px 8px 8px 32px", color: theme.textSecondary, fontSize: 13 }}>No transactions this period.</td></tr>;
+  return (
+    <>
+      {groups.map(g => (
+        <Fragment key={g.group}>
+          <tr onClick={() => setOpenGroup(openGroup === g.group ? null : g.group)} style={{ cursor: "pointer", background: theme.surfaceMuted }}>
+            <td style={{ padding: "8px 8px 8px 32px", color: theme.textTertiary }}>{openGroup === g.group ? "▾" : "▸"} {g.group}</td>
+            <td colSpan={3} style={{ textAlign: "right", padding: "8px 8px", color: theme.textTertiary, fontFeatureSettings: theme.numericFeatures }}>{fmtUsd(g.amountCents)}</td>
+          </tr>
+          {openGroup === g.group && g.items.map(it => (
+            <Fragment key={it.item}>
+              <tr onClick={() => setOpenItem(openItem === it.item ? null : it.item)} style={{ cursor: "pointer" }}>
+                <td style={{ padding: "6px 8px 6px 56px", color: theme.textSecondary, fontSize: 13 }}>{openItem === it.item ? "▾" : "▸"} {it.item}</td>
+                <td colSpan={3} style={{ textAlign: "right", padding: "6px 8px", color: theme.textSecondary, fontSize: 13, fontFeatureSettings: theme.numericFeatures }}>{fmtUsd(it.amountCents)}</td>
+              </tr>
+              {openItem === it.item && it.transactions.slice(0, 50).map((tx, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "3px 8px 3px 80px", color: theme.textSecondary, fontSize: 12 }}>{tx.date} · {tx.source}{tx.paymentType ? ` · ${tx.paymentType}` : ""}</td>
+                  <td colSpan={3} style={{ textAlign: "right", padding: "3px 8px", color: theme.textSecondary, fontSize: 12, fontFeatureSettings: theme.numericFeatures }}>{fmtUsd(tx.amountCents)}</td>
+                </tr>
+              ))}
+            </Fragment>
+          ))}
+        </Fragment>
+      ))}
+    </>
+  );
+}
 
 export default function DashboardClient({ location }: { location: string }) {
   const [period, setPeriod] = useState<"day" | "month">("day");
   const [date, setDate] = useState(yesterdayIso());
   const [month, setMonth] = useState(yesterdayIso().slice(0, 7));
-  const [daily, setDaily] = useState<DailyMetrics | null>(null);
-  const [monthly, setMonthly] = useState<MonthlyMetrics | null>(null);
+  const [report, setReport] = useState<GrowthReport | null>(null);
+  const [drilldown, setDrilldown] = useState<Record<string, DrilldownGroup[]>>({});
+  const [openLine, setOpenLine] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Restore whatever tab/date the manager had selected before a reload — a reload should
-  // never silently revert them to Day/today.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const p = params.get("period");
@@ -53,7 +107,6 @@ export default function DashboardClient({ location }: { location: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep the URL in sync so a reload (or a shared link) lands back on the same view.
   useEffect(() => {
     const params = new URLSearchParams();
     params.set("period", period);
@@ -62,33 +115,27 @@ export default function DashboardClient({ location }: { location: string }) {
   }, [period, date, month]);
 
   useEffect(() => {
-    let cancelled = false; // ignore a slower, now-stale request that resolves after a newer one
+    let cancelled = false;
     setLoading(true);
     setError(null);
     const when = period === "day" ? date : month;
-    fetch(`/api/metrics?location=${encodeURIComponent(location)}&period=${period}&date=${encodeURIComponent(when)}`)
+    fetch(`/api/growth-report?location=${encodeURIComponent(location)}&period=${period}&date=${encodeURIComponent(when)}`)
       .then(async r => {
-        // A session that was valid on page load can go stale mid-visit (cookie cleared,
-        // secret rotated, account removed elsewhere). Never show that as a raw fetch
-        // error — send the manager back to sign in, the same place a fresh visit lands.
-        if (r.status === 401 || r.status === 403) {
-          window.location.href = "/login";
-          return null;
-        }
+        if (r.status === 401 || r.status === 403) { window.location.href = "/login"; return null; }
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
         return r.json();
       })
-      .then(data => { if (cancelled || data == null) return; if (period === "day") setDaily(data); else setMonthly(data); })
+      .then(data => { if (cancelled || data == null) return; setReport(data.report); setDrilldown(data.drilldown ?? {}); })
       .catch(e => { if (!cancelled) setError(String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [location, period, date, month]);
 
   return (
-    <div>
+    <div style={{ fontFamily: theme.font.body, color: theme.ink }}>
       <div role="tablist" style={{ marginBottom: 16 }}>
-        <button role="tab" aria-selected={period === "day"} onClick={() => setPeriod("day")}>Day</button>{" "}
-        <button role="tab" aria-selected={period === "month"} onClick={() => setPeriod("month")}>Month</button>
+        <button role="tab" aria-selected={period === "day"} onClick={() => setPeriod("day")} style={tabStyle(period === "day")}>Day</button>{" "}
+        <button role="tab" aria-selected={period === "month"} onClick={() => setPeriod("month")} style={tabStyle(period === "month")}>Month</button>
       </div>
 
       {period === "day" ? (
@@ -97,48 +144,96 @@ export default function DashboardClient({ location }: { location: string }) {
         <p><input type="month" value={month} onChange={e => setMonth(e.target.value)} /></p>
       )}
 
-      {loading && <p>Loading…</p>}
-      {error && <p role="alert">Couldn&apos;t load metrics: {error}</p>}
+      {loading && <p style={{ color: theme.textSecondary }}>Loading…</p>}
+      {error && <p role="alert" style={{ color: theme.down }}>Couldn&apos;t load the report: {error}</p>}
 
-      {!loading && !error && period === "day" && daily && (
+      {!loading && !error && report && (
         <section>
-          <h2>{daily.date} — {daily.status === "complete" ? "Complete" : "Incomplete (excluded from comparatives)"}</h2>
-          {daily.totalGrossCents === 0 && daily.status === "incomplete" ? (
-            <p>No sales loaded yet for this day.</p>
-          ) : (
-            <>
-              <p>Total: {fmtUsd(daily.totalGrossCents)}</p>
-              <p>GoTab (F&amp;B): {fmtUsd(daily.gotabGrossCents)}</p>
-              <p>CourtReserve (courts): {fmtUsd(daily.courtreserveGrossCents)}</p>
-              <ul>
-                {Object.entries(daily.breakdown).map(([k, v]) => <li key={k}>{k}: {fmtUsd(v)}</li>)}
-              </ul>
-            </>
-          )}
-        </section>
-      )}
+          <p style={{ color: theme.textSecondary, fontSize: 14 }}>
+            Recognized revenue through <strong>{report.recognitionThroughDate}</strong> — earned-by-service-date figures only; future bookings are never included in a total.
+          </p>
 
-      {!loading && !error && period === "month" && monthly && (
-        <section>
-          <h2>{monthly.month}</h2>
-          {monthly.completeDays === 0 ? (
-            <p>No complete days loaded yet this month.</p>
-          ) : (
-            <>
-              <p>Total: {fmtUsd(monthly.totalGrossCents)}</p>
-              <p>GoTab (F&amp;B): {fmtUsd(monthly.gotabGrossCents)}</p>
-              <p>CourtReserve (courts): {fmtUsd(monthly.courtreserveGrossCents)}</p>
-              <p>{monthly.completeDays} complete day(s), {monthly.incompleteDays} incomplete (excluded)</p>
-              {monthly.priorPeriod && (
-                <p>
-                  {monthly.priorPeriod.label}: {fmtUsd(monthly.priorPeriod.totalGrossCents)}
-                  {monthly.priorPeriod.pctChange != null ? ` (${monthly.priorPeriod.pctChange > 0 ? "+" : ""}${monthly.priorPeriod.pctChange}%)` : ""}
-                </p>
-              )}
-            </>
+          {(report.missing.current.length > 0) && (
+            <div style={{ background: theme.surfaceMuted, border: `1px solid ${theme.border}`, borderRadius: theme.radius.card, padding: theme.space(3), margin: `${theme.space(3)} 0`, fontSize: 13, color: theme.textTertiary }}>
+              <strong>Incomplete period:</strong>
+              <ul style={{ margin: "4px 0 0 18px" }}>{report.missing.current.map((m, i) => <li key={i}>{m}</li>)}</ul>
+            </div>
           )}
+
+          {report.alerts.length > 0 && (
+            <div style={{ margin: `${theme.space(3)} 0` }}>
+              {report.alerts.map((a, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", padding: "6px 10px", borderRadius: theme.radius.pill, background: a.direction === "up" ? "#EAF7EF" : "#FBEAEA", marginBottom: 4, fontSize: 13 }}>
+                  <TrafficDot pct={a.direction === "up" ? 100 : -100} />
+                  <span>{a.label} is {a.pct > 0 ? "+" : ""}{a.pct}% vs {a.comparison === "prior_month" ? "prior month" : "same month last year"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <table style={{ width: "100%", borderCollapse: "collapse", fontFeatureSettings: theme.numericFeatures }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
+                <th style={{ textAlign: "left", padding: "8px", color: theme.textSecondary, fontWeight: 400, fontSize: 13 }}>Business line</th>
+                <th style={{ textAlign: "right", padding: "8px", color: theme.textSecondary, fontWeight: 400, fontSize: 13 }}>This period</th>
+                <th style={{ textAlign: "right", padding: "8px", color: theme.textSecondary, fontWeight: 400, fontSize: 13 }}>{report.comparisonLabels.priorMonth}</th>
+                <th style={{ textAlign: "right", padding: "8px", color: theme.textSecondary, fontWeight: 400, fontSize: 13 }}>{report.comparisonLabels.lastYear}</th>
+              </tr>
+              <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
+                <td style={{ padding: "4px 8px", color: theme.textTertiary, fontSize: 12 }}># Days</td>
+                <td style={{ textAlign: "right", padding: "4px 8px", color: theme.textTertiary, fontSize: 12 }}>{report.daysRow.current}</td>
+                <td style={{ textAlign: "right", padding: "4px 8px", color: theme.textTertiary, fontSize: 12 }}>{report.daysRow.priorMonth}</td>
+                <td style={{ textAlign: "right", padding: "4px 8px", color: theme.textTertiary, fontSize: 12 }}>{report.daysRow.lastYear}</td>
+              </tr>
+            </thead>
+            <tbody>
+              {report.rows.map(row => {
+                const isRollup = ROLLUP_LINES.has(row.businessLine);
+                const isGrossOrTotal = row.businessLine === "gross_revenues" || row.businessLine === "total";
+                const clickable = !isRollup;
+                return (
+                  <Fragment key={row.businessLine}>
+                    <tr
+                      onClick={clickable ? () => setOpenLine(openLine === row.businessLine ? null : row.businessLine) : undefined}
+                      style={{
+                        cursor: clickable ? "pointer" : "default",
+                        fontWeight: isGrossOrTotal ? 700 : 400,
+                        borderTop: (row.businessLine === "gross_revenues" || row.businessLine === "total") ? `1px solid ${theme.border}` : undefined,
+                      }}
+                    >
+                      <td style={{ padding: "10px 8px", color: row.businessLine === "unmapped" ? theme.textSecondary : theme.ink }}>
+                        {clickable ? (openLine === row.businessLine ? "▾ " : "▸ ") : ""}{row.label}
+                      </td>
+                      <td style={{ textAlign: "right", padding: "10px 8px" }}>{fmtUsd(row.current)}</td>
+                      <ComparisonCell amount={row.priorMonth} pct={row.vsPriorMonthPct} />
+                      <ComparisonCell amount={row.lastYear} pct={row.vsLastYearPct} />
+                    </tr>
+                    {openLine === row.businessLine && <DrilldownRows groups={drilldown[row.businessLine] ?? []} />}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+
+          <p style={{ marginTop: 16 }}>
+            <a href={`/dashboard/${location}/day/${period === "day" ? date : `${month}-01`}`} style={{ color: theme.clientAccent }}>
+              Open day view →
+            </a>
+          </p>
         </section>
       )}
     </div>
   );
+}
+
+function tabStyle(active: boolean): CSSProperties {
+  return {
+    border: "none",
+    background: active ? theme.clientAccent : theme.surfaceMuted,
+    color: active ? "#fff" : theme.textSecondary,
+    borderRadius: theme.radius.pill,
+    padding: "6px 16px",
+    fontFamily: theme.font.body,
+    cursor: "pointer",
+  };
 }
