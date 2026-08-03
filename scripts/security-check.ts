@@ -22,7 +22,12 @@ try {
 }
 
 // 2 · destructive-op linter — irreversible ops must sit behind requireCheckpoint()
-const DESTRUCTIVE = /(DROP\s+TABLE|TRUNCATE\s|rm\s+-rf|\.delete\(|deleteMany|destroy\()/i;
+// Built from concatenated fragments, not one literal: a literal pattern here would contain
+// its own trigger words (e.g. "delete" + "Many") and flag this very line every run.
+const DESTRUCTIVE = new RegExp(
+  ["DROP\\s+TABLE", "TRUNCATE\\s", "rm\\s+-rf", "\\.delete\\(", "delete" + "Many", "destroy\\("].join("|"),
+  "i",
+);
 const trackedFiles = execSync("git ls-files", { encoding: "utf8" }).split("\n").filter(Boolean);
 const codeFiles = trackedFiles.filter(f => /\.(ts|tsx|sql)$/.test(f) && /^(packages|apps|scripts)\//.test(f));
 let destructiveHits = 0;
