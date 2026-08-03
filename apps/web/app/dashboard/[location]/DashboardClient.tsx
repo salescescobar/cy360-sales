@@ -43,15 +43,31 @@ function TrafficDot({ pct }: { pct: number | null }) {
   return <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: color, marginRight: 6 }} />;
 }
 
-function ComparisonCell({ amount, pct }: { amount: number; pct: number | null }) {
+function ComparisonCell({ amount, pct, bold }: { amount: number; pct: number | null; bold?: boolean }) {
   return (
-    <td style={{ textAlign: "right", padding: "10px 8px", fontFeatureSettings: theme.numericFeatures, whiteSpace: "nowrap" }}>
-      <span>{fmtUsd(amount)}</span>{" "}
-      <span style={{ color: pct == null ? theme.textSecondary : trafficDirection(pct, THRESHOLDS) === "up" ? theme.up : trafficDirection(pct, THRESHOLDS) === "down" ? theme.down : theme.flat, fontSize: 13 }}>
+    <td style={{ textAlign: "right", padding: "7px 8px", fontFeatureSettings: theme.numericFeatures, whiteSpace: "nowrap" }}>
+      <span style={{ fontWeight: bold ? 700 : 400 }}>{fmtUsd(amount)}</span>{" "}
+      <span style={{ color: pct == null ? theme.textSecondary : trafficDirection(pct, THRESHOLDS) === "up" ? theme.up : trafficDirection(pct, THRESHOLDS) === "down" ? theme.down : theme.flat, fontSize: 12, fontWeight: 600 }}>
         <TrafficDot pct={pct} />{fmtPct(pct)}
       </span>
     </td>
   );
+}
+
+/** Gross Revenues, Discounts and Total are the answer, not just three more lines — a rule
+ *  above the block and bold weight throughout separate "the 8 lines" from "the bottom line"
+ *  (spec item 1). Total additionally gets a heavier rule + tinted row so it reads as final. */
+function summaryRowStyle(businessLine: string): CSSProperties {
+  if (businessLine === "total") {
+    return { fontWeight: 700, fontSize: 15, borderTop: `2px solid ${theme.ink}`, background: theme.surfaceMuted };
+  }
+  if (businessLine === "gross_revenues") {
+    return { fontWeight: 700, borderTop: `2px solid ${theme.border}` };
+  }
+  if (businessLine === "discounts") {
+    return { fontWeight: 700 };
+  }
+  return { fontWeight: 400 };
 }
 
 /** Controlled by the parent (not local state) so the expansion path survives a reload — the
@@ -154,40 +170,41 @@ export default function DashboardClient({ location }: { location: string }) {
   }, [location, period, date, month]);
 
   return (
-    <div style={{ fontFamily: theme.font.body, color: theme.ink }}>
-      <div role="tablist" style={{ marginBottom: 16 }}>
-        <button role="tab" aria-selected={period === "day"} onClick={() => setPeriod("day")} style={tabStyle(period === "day")}>Day</button>{" "}
-        <button role="tab" aria-selected={period === "month"} onClick={() => setPeriod("month")} style={tabStyle(period === "month")}>Month</button>
+    <div style={{ fontFamily: theme.font.body, color: theme.ink, fontSize: 13.5 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: theme.space(2), marginBottom: theme.space(3) }}>
+        <div role="tablist">
+          <button role="tab" aria-selected={period === "day"} onClick={() => setPeriod("day")} style={tabStyle(period === "day")}>Day</button>{" "}
+          <button role="tab" aria-selected={period === "month"} onClick={() => setPeriod("month")} style={tabStyle(period === "month")}>Month</button>
+        </div>
+        {period === "day" ? (
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} />
+        ) : (
+          <input type="month" value={month} onChange={e => setMonth(e.target.value)} />
+        )}
       </div>
-
-      {period === "day" ? (
-        <p><input type="date" value={date} onChange={e => setDate(e.target.value)} /></p>
-      ) : (
-        <p><input type="month" value={month} onChange={e => setMonth(e.target.value)} /></p>
-      )}
 
       {loading && <p style={{ color: theme.textSecondary }}>Loading…</p>}
       {error && <p role="alert" style={{ color: theme.down }}>Couldn&apos;t load the report: {error}</p>}
 
       {!loading && !error && report && (
         <section>
-          <p style={{ color: theme.textSecondary, fontSize: 14 }}>
-            Recognized revenue through <strong>{report.recognitionThroughDate}</strong> — earned-by-service-date figures only; future bookings are never included in a total.
+          <p style={{ color: theme.textSecondary, fontSize: 12.5, margin: "0 0 6px" }}>
+            Recognized through <strong style={{ color: theme.textTertiary }}>{report.recognitionThroughDate}</strong> — earned-by-service-date only; future bookings never included.
           </p>
 
           {(report.missing.current.length > 0) && (
-            <div style={{ background: theme.surfaceMuted, border: `1px solid ${theme.border}`, borderRadius: theme.radius.card, padding: theme.space(3), margin: `${theme.space(3)} 0`, fontSize: 13, color: theme.textTertiary }}>
-              <strong>Incomplete period:</strong>
-              <ul style={{ margin: "4px 0 0 18px" }}>{report.missing.current.map((m, i) => <li key={i}>{m}</li>)}</ul>
+            <div style={{ background: theme.surfaceMuted, border: `1px solid ${theme.border}`, borderRadius: theme.radius.card, padding: "6px 10px", margin: "0 0 6px", fontSize: 12, color: theme.textTertiary }}>
+              <strong>Incomplete period:</strong>{" "}
+              {report.missing.current.join(" · ")}
             </div>
           )}
 
           {report.alerts.length > 0 && (
-            <div style={{ margin: `${theme.space(3)} 0` }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, margin: "0 0 6px" }}>
               {report.alerts.map((a, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", padding: "6px 10px", borderRadius: theme.radius.pill, background: a.direction === "up" ? "#EAF7EF" : "#FBEAEA", marginBottom: 4, fontSize: 13 }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", padding: "3px 8px", borderRadius: theme.radius.pill, background: a.direction === "up" ? "#EAF7EF" : "#FBEAEA", fontSize: 12 }}>
                   <TrafficDot pct={a.direction === "up" ? 100 : -100} />
-                  <span>{a.label} is {a.pct > 0 ? "+" : ""}{a.pct}% vs {a.comparison === "prior_month" ? "prior month" : "same month last year"}</span>
+                  <span>{a.label} {a.pct > 0 ? "+" : ""}{a.pct}% vs {a.comparison === "prior_month" ? "prior month" : "last year"}</span>
                 </div>
               ))}
             </div>
@@ -196,23 +213,23 @@ export default function DashboardClient({ location }: { location: string }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontFeatureSettings: theme.numericFeatures }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                <th style={{ textAlign: "left", padding: "8px", color: theme.textSecondary, fontWeight: 400, fontSize: 13 }}>Business line</th>
-                <th style={{ textAlign: "right", padding: "8px", color: theme.textSecondary, fontWeight: 400, fontSize: 13 }}>This period</th>
-                <th style={{ textAlign: "right", padding: "8px", color: theme.textSecondary, fontWeight: 400, fontSize: 13 }}>{report.comparisonLabels.priorMonth}</th>
-                <th style={{ textAlign: "right", padding: "8px", color: theme.textSecondary, fontWeight: 400, fontSize: 13 }}>{report.comparisonLabels.lastYear}</th>
+                <th style={{ textAlign: "left", padding: "5px 8px", color: theme.textSecondary, fontWeight: 400, fontSize: 12 }}>Business line</th>
+                <th style={{ textAlign: "right", padding: "5px 8px", color: theme.textSecondary, fontWeight: 400, fontSize: 12 }}>This period</th>
+                <th style={{ textAlign: "right", padding: "5px 8px", color: theme.textSecondary, fontWeight: 400, fontSize: 12 }}>{report.comparisonLabels.priorMonth}</th>
+                <th style={{ textAlign: "right", padding: "5px 8px", color: theme.textSecondary, fontWeight: 400, fontSize: 12 }}>{report.comparisonLabels.lastYear}</th>
               </tr>
               <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                <td style={{ padding: "4px 8px", color: theme.textTertiary, fontSize: 12 }}># Days</td>
-                <td style={{ textAlign: "right", padding: "4px 8px", color: theme.textTertiary, fontSize: 12 }}>{report.daysRow.current}</td>
-                <td style={{ textAlign: "right", padding: "4px 8px", color: theme.textTertiary, fontSize: 12 }}>{report.daysRow.priorMonth}</td>
-                <td style={{ textAlign: "right", padding: "4px 8px", color: theme.textTertiary, fontSize: 12 }}>{report.daysRow.lastYear}</td>
+                <td style={{ padding: "3px 8px", color: theme.textTertiary, fontSize: 11 }}># Days</td>
+                <td style={{ textAlign: "right", padding: "3px 8px", color: theme.textTertiary, fontSize: 11 }}>{report.daysRow.current}</td>
+                <td style={{ textAlign: "right", padding: "3px 8px", color: theme.textTertiary, fontSize: 11 }}>{report.daysRow.priorMonth}</td>
+                <td style={{ textAlign: "right", padding: "3px 8px", color: theme.textTertiary, fontSize: 11 }}>{report.daysRow.lastYear}</td>
               </tr>
             </thead>
             <tbody>
               {report.rows.map(row => {
                 const isRollup = ROLLUP_LINES.has(row.businessLine);
-                const isGrossOrTotal = row.businessLine === "gross_revenues" || row.businessLine === "total";
                 const clickable = !isRollup;
+                const rowStyle = { ...summaryRowStyle(row.businessLine), cursor: clickable ? "pointer" : "default" };
                 return (
                   <Fragment key={row.businessLine}>
                     <tr
@@ -221,18 +238,14 @@ export default function DashboardClient({ location }: { location: string }) {
                         setOpenGroup(null);
                         setOpenItem(null);
                       } : undefined}
-                      style={{
-                        cursor: clickable ? "pointer" : "default",
-                        fontWeight: isGrossOrTotal ? 700 : 400,
-                        borderTop: (row.businessLine === "gross_revenues" || row.businessLine === "total") ? `1px solid ${theme.border}` : undefined,
-                      }}
+                      style={rowStyle}
                     >
-                      <td style={{ padding: "10px 8px", color: row.businessLine === "unmapped" ? theme.textSecondary : theme.ink }}>
+                      <td style={{ padding: "7px 8px", color: row.businessLine === "unmapped" ? theme.textSecondary : theme.ink }}>
                         {clickable ? (openLine === row.businessLine ? "▾ " : "▸ ") : ""}{row.label}
                       </td>
-                      <td style={{ textAlign: "right", padding: "10px 8px" }}>{fmtUsd(row.current)}</td>
-                      <ComparisonCell amount={row.priorMonth} pct={row.vsPriorMonthPct} />
-                      <ComparisonCell amount={row.lastYear} pct={row.vsLastYearPct} />
+                      <td style={{ textAlign: "right", padding: "7px 8px" }}>{fmtUsd(row.current)}</td>
+                      <ComparisonCell amount={row.priorMonth} pct={row.vsPriorMonthPct} bold={isRollup} />
+                      <ComparisonCell amount={row.lastYear} pct={row.vsLastYearPct} bold={isRollup} />
                     </tr>
                     {openLine === row.businessLine && (
                       <DrilldownRows
@@ -249,8 +262,8 @@ export default function DashboardClient({ location }: { location: string }) {
             </tbody>
           </table>
 
-          <p style={{ marginTop: 16 }}>
-            <a href={`/dashboard/${location}/day/${period === "day" ? date : `${month}-01`}`} style={{ color: theme.clientAccent }}>
+          <p style={{ marginTop: 10 }}>
+            <a href={`/dashboard/${location}/day/${period === "day" ? date : `${month}-01`}`}>
               Open day view →
             </a>
           </p>

@@ -16,7 +16,9 @@ core:
   - { id: incomplete_labelled,  blocker: true,  desc: "Incomplete periods are labelled, excluded from comparatives, and say what is missing" }
   - { id: hostile_inputs,       blocker: true,  desc: "Malformed dates, path traversal, 10k-char inputs and a 10MB upload return clean errors, never a crash" }
   - { id: security_gate,        blocker: true,  desc: "Secret scan, dependency audit and destructive-op linter green" }
-  - { id: design_quality,       blocker: false, desc: "Uses theme.ts tokens: Crush Yard accent #E8503E, ink #16181D, tabular right-aligned figures, negatives in parentheses, rules above Gross Revenues and Total, bold only there, em dash for absent values" }
+  - { id: design_quality,       blocker: true,  desc: "Uses theme.ts tokens: Crush Yard accent #E8503E, ink #16181D, tabular right-aligned figures, negatives in parentheses, rules above Gross Revenues and Total, bold only there, em dash for absent values" }
+  - { id: summarized_first,     blocker: true,  desc: "Every screen leads with the SUMMARY a manager needs and hides granularity behind expand/drill-down. The reconciliation view must open with the total delta plus a short list of WHY (refunds, timing, uncategorized), grouped by FeeCategory with subtotals — a flat category x transaction-type matrix is a FAILURE" }
+  - { id: uses_theme_tokens,    blocker: true,  desc: "Every screen imports tokens from apps/web/app/lib/theme.ts: no default browser styling, no underlined blue links, no unstyled tables. Figures use tabular numerals and are right-aligned" }
   - { id: responsive,           blocker: false, desc: "Usable at 390px and on desktop" }
 holdout_pool:
   - { id: h_refresh_mid_flow, desc: "Reloading mid-flow preserves the selected view, month and drill-down level" }
