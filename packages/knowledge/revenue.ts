@@ -104,7 +104,12 @@ export async function replaceRecognizedRevenue(
 ): Promise<void> {
   if (supabaseConfigured()) {
     try {
-      await supabaseRest(`revenue_recognized?location_slug=eq.${locationSlug}&business_date=gte.${fromDate}&business_date=lte.${toDate}`, { method: "DELETE" });
+      // Same null-business_date reasoning as readRecognizedRevenue: a GoTab monthly
+      // aggregate for this month must be deleted too, or a re-ingest duplicates it instead
+      // of replacing it (both rows then sum together — the same double-count bug reads fix).
+      const periodMonth = `${fromDate.slice(0, 7)}-01`;
+      const dateFilter = `or=(and(business_date.gte.${fromDate},business_date.lte.${toDate}),and(business_date.is.null,period_month.eq.${periodMonth}))`;
+      await supabaseRest(`revenue_recognized?location_slug=eq.${locationSlug}&${dateFilter}`, { method: "DELETE" });
       const aggregated = aggregateForNaturalKey(rows);
       if (aggregated.length) {
         // The live table (verified live 2026-08-02) has no external_id/transaction_type/
@@ -133,21 +138,34 @@ export async function replaceRecognizedRevenue(
   }
   requireLocalFallbackAllowed("replaceRecognizedRevenue");
   const path = revenuePath(locationSlug);
+  const month = fromDate.slice(0, 7);
   const inRange = (d: string) => d >= fromDate && d <= toDate;
-  const kept = readLocalArray<RecognizedRevenueRow>(path).filter(r => !inRange(r.businessDate));
+  const kept = readLocalArray<RecognizedRevenueRow>(path)
+    .filter(r => !(r.businessDate != null ? inRange(r.businessDate) : r.periodMonth === month));
   writeLocalArray(path, [...kept, ...rows]);
 }
 
+/** Every caller passes a single calendar month's [first-day, last-day] range
+ *  (buildPeriodInput, the reconciliation route). GoTab's recognized-revenue monthly
+ *  aggregates (either grain — "Categories" or "Business Lines", see
+ *  packages/skills/business-lines/index.ts) carry a real period_month but NO business_date —
+ *  there's no single day to assign a whole month's total to. A plain business_date range
+ *  filter silently excludes every one of those rows (NULL never matches gte/lte), which is
+ *  exactly how a month's GoTab recognized revenue used to go missing from the report and fall
+ *  back to the legacy daily_sales path instead. Match them by period_month too.
+ */
 export async function readRecognizedRevenue(locationSlug: string, fromDate: string, toDate: string): Promise<RecognizedRevenueRow[]> {
+  const periodMonth = `${fromDate.slice(0, 7)}-01`;
   if (supabaseConfigured()) {
     try {
-      const res = await supabaseRest(`revenue_recognized?location_slug=eq.${locationSlug}&business_date=gte.${fromDate}&business_date=lte.${toDate}&order=business_date.asc`);
+      const dateFilter = `or=(and(business_date.gte.${fromDate},business_date.lte.${toDate}),and(business_date.is.null,period_month.eq.${periodMonth}))`;
+      const res = await supabaseRest(`revenue_recognized?location_slug=eq.${locationSlug}&${dateFilter}&order=business_date.asc.nullslast`);
       const data = (await res.json()) as Array<Record<string, unknown>>;
       return data.map(d => {
         const raw = (d.raw as Record<string, unknown>) ?? {};
         return {
           locationSlug: d.location_slug as string, source: d.source as "courtreserve" | "gotab", externalId: "",
-          businessDate: d.business_date as string, periodMonth: (d.period_month as string).slice(0, 7), groupName: d.group_name as string,
+          businessDate: (d.business_date as string | null) ?? null, periodMonth: (d.period_month as string).slice(0, 7), groupName: d.group_name as string,
           itemName: d.item_name as string, amountCents: d.amount_cents as number, taxCents: d.tax_cents as number,
           netCents: d.net_cents as number, transactionType: (raw.TransactionType as string | null) ?? null,
           paymentType: (raw.PaymentType as string | null) ?? null, feeId: null, paymentId: null, relationId: null,
@@ -159,8 +177,9 @@ export async function readRecognizedRevenue(locationSlug: string, fromDate: stri
       warnSchemaNotMigrated();
     }
   }
+  const month = fromDate.slice(0, 7);
   const rows = readLocalArray<RecognizedRevenueRow>(revenuePath(locationSlug));
-  return rows.filter(r => r.businessDate >= fromDate && r.businessDate <= toDate);
+  return rows.filter(r => (r.businessDate != null && r.businessDate >= fromDate && r.businessDate <= toDate) || (r.businessDate == null && r.periodMonth === month));
 }
 
 // ── business_line_map ──

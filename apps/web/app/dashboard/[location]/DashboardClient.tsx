@@ -19,9 +19,10 @@ type GrowthReport = {
   daysRow: { current: number; priorMonth: number; lastYear: number };
   comparisonLabels: { priorMonth: string; lastYear: string };
   missing: { current: string[]; priorMonth: string[]; lastYear: string[] };
+  noData: { priorMonth: boolean; lastYear: boolean };
   alerts: Array<{ businessLine: string; label: string; comparison: string; direction: "up" | "down"; pct: number }>;
 };
-type DrilldownTx = { date: string; amountCents: number; source: "gotab" | "courtreserve"; transactionType?: string | null; paymentType?: string | null };
+type DrilldownTx = { date: string | null; amountCents: number; source: "gotab" | "courtreserve"; transactionType?: string | null; paymentType?: string | null };
 type DrilldownItem = { item: string; amountCents: number; transactions: DrilldownTx[] };
 type DrilldownGroup = { group: string; amountCents: number; items: DrilldownItem[] };
 type DataQualityInfo = { hasUnresolvedError: boolean; dates: string[]; messages: string[] };
@@ -52,13 +53,17 @@ function TrafficDot({ pct }: { pct: number | null }) {
   return <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: color, marginRight: 6 }} />;
 }
 
-function ComparisonCell({ amount, pct, bold }: { amount: number; pct: number | null; bold?: boolean }) {
+function ComparisonCell({ amount, pct, bold, noData }: { amount: number; pct: number | null; bold?: boolean; noData?: boolean }) {
   return (
     <td style={{ textAlign: "right", padding: "7px 8px", fontFeatureSettings: theme.numericFeatures, whiteSpace: "nowrap" }}>
       <span style={{ fontWeight: bold ? 700 : 400 }}>{fmtUsd(amount)}</span>{" "}
-      <span style={{ color: pct == null ? theme.textSecondary : trafficDirection(pct, THRESHOLDS) === "up" ? theme.up : trafficDirection(pct, THRESHOLDS) === "down" ? theme.down : theme.flat, fontSize: 12, fontWeight: 600 }}>
-        <TrafficDot pct={pct} />{fmtPct(pct)}
-      </span>
+      {noData ? (
+        <span style={{ color: theme.textSecondary, fontSize: 12, fontWeight: 600 }}>no data</span>
+      ) : (
+        <span style={{ color: pct == null ? theme.textSecondary : trafficDirection(pct, THRESHOLDS) === "up" ? theme.up : trafficDirection(pct, THRESHOLDS) === "down" ? theme.down : theme.flat, fontSize: 12, fontWeight: 600 }}>
+          <TrafficDot pct={pct} />{fmtPct(pct)}
+        </span>
+      )}
     </td>
   );
 }
@@ -269,8 +274,8 @@ export default function DashboardClient({ location }: { location: string }) {
                         {clickable ? (openLine === row.businessLine ? "▾ " : "▸ ") : ""}{row.label}
                       </td>
                       <td style={{ textAlign: "right", padding: "7px 8px" }}>{fmtUsd(row.current)}</td>
-                      <ComparisonCell amount={row.priorMonth} pct={row.vsPriorMonthPct} bold={isRollup} />
-                      <ComparisonCell amount={row.lastYear} pct={row.vsLastYearPct} bold={isRollup} />
+                      <ComparisonCell amount={row.priorMonth} pct={row.vsPriorMonthPct} bold={isRollup} noData={report.noData.priorMonth} />
+                      <ComparisonCell amount={row.lastYear} pct={row.vsLastYearPct} bold={isRollup} noData={report.noData.lastYear} />
                     </tr>
                     {openLine === row.businessLine && (
                       <DrilldownRows

@@ -81,8 +81,11 @@ export type PeriodTotals = {
 function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: BusinessLineRule[], singleDay = false): PeriodTotals {
   const effectiveDays = Math.min(elapsedDays, daysInMonth(period.label));
   // Month view accumulates day 1..effectiveDays (month-to-date); day view isolates exactly
-  // that one day-of-month across every period being compared, never the days before it.
-  const excluded = (date: string) => singleDay ? dayOfMonth(date) !== effectiveDays : dayOfMonth(date) > effectiveDays;
+  // that one day-of-month across every period being compared, never the days before it. A
+  // recognized-revenue row with no business_date at all is a GoTab monthly aggregate (either
+  // grain — packages/skills/business-lines) with no single day to slice against, so it always
+  // counts in full rather than being excluded by a dayOfMonth() comparison that can't run.
+  const excluded = (date: string | null) => date == null ? false : (singleDay ? dayOfMonth(date) !== effectiveDays : dayOfMonth(date) > effectiveDays);
   const byLine = new Map<string, number>();
   let discountCents = 0;
   // A negative-amount line item (a discount/refund) is pulled into its own bucket at the
@@ -103,20 +106,23 @@ function summarizePeriod(period: PeriodInput, elapsedDays: number, rules: Busine
   const missing: string[] = [];
   if (!period.courtreserveOk) missing.push("CourtReserve: API call failed for this period — excluded from totals");
 
-  // recognized_revenue can already carry a day's GoTab revenue directly (either grain — see
-  // business-lines/index.ts) via courtRows above. The older daily_sales breakdown (gotabDays)
-  // must never ALSO be summed for a date that's already covered that way, or the day's
-  // revenue would be counted twice across the two grains.
-  const gotabRecognizedDates = new Set(period.courtRows.filter(r => r.source === "gotab").map(r => r.businessDate));
+  // recognized_revenue can already carry this month's GoTab revenue directly (either grain —
+  // see business-lines/index.ts), often as a monthly aggregate with NO business_date (there's
+  // no single day to key a per-date guard against). So the guard is MONTH-level, not
+  // date-level: ANY gotab row recognized for this location+month means the older daily_sales
+  // breakdown (gotabDays) must never ALSO be summed for the month, or GoTab's revenue would
+  // be counted twice across the two grains — not just on whichever dates happen to line up.
+  const hasGotabRecognizedForMonth = period.courtRows.some(r => r.source === "gotab");
 
   const missingGotabDates: string[] = [];
-  for (const day of period.gotabDays) {
-    if (excluded(day.date)) continue;
-    if (gotabRecognizedDates.has(day.date)) continue;
-    if (day.status !== "complete") { missingGotabDates.push(day.date); continue; }
-    for (const [category, cents] of Object.entries(day.breakdown)) {
-      const line = resolveBusinessLine(rules, "gotab", category, category);
-      bump(line, cents);
+  if (!hasGotabRecognizedForMonth) {
+    for (const day of period.gotabDays) {
+      if (excluded(day.date)) continue;
+      if (day.status !== "complete") { missingGotabDates.push(day.date); continue; }
+      for (const [category, cents] of Object.entries(day.breakdown)) {
+        const line = resolveBusinessLine(rules, "gotab", category, category);
+        bump(line, cents);
+      }
     }
   }
   if (missingGotabDates.length > 0) {
@@ -185,6 +191,11 @@ export type GrowthReport = {
   daysRow: { current: number; priorMonth: number; lastYear: number };
   comparisonLabels: { priorMonth: string; lastYear: string };
   missing: { current: string[]; priorMonth: string[]; lastYear: string[] };
+  // A comparison period with NOTHING booked across every business line — no CourtReserve, no
+  // GoTab, nothing — is a different situation than "this period genuinely earned $0 vs a real
+  // comparison"; the caller renders "no data" instead of the usual em-dash-next-to-a-percentage
+  // so a manager can't mistake "we have no data for this period" for "this period was flat."
+  noData: { priorMonth: boolean; lastYear: boolean };
   alerts: Alert[];
 };
 
@@ -193,7 +204,7 @@ function pctChange(current: number, compare: number): number | null {
   return +(((current - compare) / Math.abs(compare)) * 100).toFixed(1);
 }
 
-export type DrilldownTransaction = { date: string; amountCents: number; source: "gotab" | "courtreserve"; transactionType?: string | null; paymentType?: string | null };
+export type DrilldownTransaction = { date: string | null; amountCents: number; source: "gotab" | "courtreserve"; transactionType?: string | null; paymentType?: string | null };
 export type DrilldownItem = { item: string; amountCents: number; transactions: DrilldownTransaction[] };
 export type DrilldownGroup = { group: string; amountCents: number; items: DrilldownItem[] };
 
@@ -205,7 +216,7 @@ export type DrilldownGroup = { group: string; amountCents: number; items: Drilld
  */
 export function buildDrilldown(period: PeriodInput, elapsedDays: number, rules: BusinessLineRule[], singleDay = false): Record<string, DrilldownGroup[]> {
   const effectiveDays = Math.min(elapsedDays, daysInMonth(period.label));
-  const excluded = (date: string) => singleDay ? dayOfMonth(date) !== effectiveDays : dayOfMonth(date) > effectiveDays;
+  const excluded = (date: string | null) => date == null ? false : (singleDay ? dayOfMonth(date) !== effectiveDays : dayOfMonth(date) > effectiveDays);
   const byLineGroupItem = new Map<string, Map<string, Map<string, DrilldownTransaction[]>>>();
 
   const record = (line: string, group: string, item: string, tx: DrilldownTransaction) => {
@@ -222,14 +233,17 @@ export function buildDrilldown(period: PeriodInput, elapsedDays: number, rules: 
     const line = resolveBusinessLine(rules, row.source, row.groupName, row.itemName);
     record(line, row.groupName, row.itemName, { date: row.businessDate, amountCents: row.amountCents, source: row.source, transactionType: row.transactionType, paymentType: row.paymentType });
   }
-  // Same double-count guard as summarizePeriod above — a date already covered by a
-  // recognized-revenue GoTab row must not also pull in the legacy daily_sales breakdown.
-  const gotabRecognizedDates = new Set(period.courtRows.filter(r => r.source === "gotab").map(r => r.businessDate));
-  for (const day of period.gotabDays) {
-    if (excluded(day.date) || day.status !== "complete" || gotabRecognizedDates.has(day.date)) continue;
-    for (const [category, cents] of Object.entries(day.breakdown)) {
-      const line = resolveBusinessLine(rules, "gotab", category, category);
-      record(line, category, category, { date: day.date, amountCents: cents, source: "gotab" });
+  // Same MONTH-level double-count guard as summarizePeriod above — ANY gotab row recognized
+  // for this location+month (including a monthly aggregate with no business_date) must
+  // suppress the legacy daily_sales breakdown for the whole month, not just matching dates.
+  const hasGotabRecognizedForMonth = period.courtRows.some(r => r.source === "gotab");
+  if (!hasGotabRecognizedForMonth) {
+    for (const day of period.gotabDays) {
+      if (excluded(day.date) || day.status !== "complete") continue;
+      for (const [category, cents] of Object.entries(day.breakdown)) {
+        const line = resolveBusinessLine(rules, "gotab", category, category);
+        record(line, category, category, { date: day.date, amountCents: cents, source: "gotab" });
+      }
     }
   }
 
@@ -311,6 +325,7 @@ export function computeGrowthReport(input: GrowthReportInput): GrowthReport {
   }
 
   const dayLabel = (n: number) => singleDay ? `the same day of the month` : `first ${n} day${n === 1 ? "" : "s"}`;
+  const periodIsEmpty = (totals: PeriodTotals) => (totals.lines.find(l => l.businessLine === "total")?.amountCents ?? 0) === 0;
   return {
     locationSlug: input.locationSlug,
     recognitionThroughDate: input.recognitionThroughDate,
@@ -321,6 +336,7 @@ export function computeGrowthReport(input: GrowthReportInput): GrowthReport {
       lastYear: `same month last year, ${dayLabel(lastYear.elapsedDays)} (${input.lastYear.label})`,
     },
     missing: { current: currentMissing, priorMonth: priorMonth.missing, lastYear: lastYear.missing },
+    noData: { priorMonth: periodIsEmpty(priorMonth), lastYear: periodIsEmpty(lastYear) },
     alerts,
   };
 }

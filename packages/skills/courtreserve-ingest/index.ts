@@ -440,7 +440,10 @@ export type RecognizedRevenueRow = {
   // the right rule set (packages/skills/growth-report/index.ts).
   source: "courtreserve" | "gotab";
   externalId: string; // FeeId::PaymentId::RelationId (falls back to a positional id when all three are absent)
-  businessDate: string; // YYYY-MM-DD, date(StartDateTime) — service date, never payment date
+  // YYYY-MM-DD, date(StartDateTime) — service date, never payment date. NULL for a GoTab
+  // monthly aggregate (either recognized-revenue grain — packages/skills/business-lines):
+  // there's no single day to assign a whole month's total to.
+  businessDate: string | null;
   periodMonth: string; // YYYY-MM, derived from businessDate
   groupName: string; // FeeCategory
   itemName: string; // Description
@@ -567,7 +570,10 @@ export async function ingestRecognizedRevenue(
   // at the edge of the window can come back from both this range's fetch and the neighboring
   // one's, and replaceRecognizedRevenue only deletes [startDate, endDate] before inserting.
   const inRange = (date: string) => date >= startDate && date <= endDate;
-  return mapRevenueRecognitionRows(rawRows, locationSlug, cfg).filter(r => inRange(r.businessDate));
+  // CourtReserve rows always carry a real businessDate (mapRevenueRecognitionRows derives it
+  // from StartDateTime/PaidDate); the null case only exists for GoTab's monthly aggregates,
+  // which never come through this ingest path.
+  return mapRevenueRecognitionRows(rawRows, locationSlug, cfg).filter(r => r.businessDate != null && inRange(r.businessDate));
 }
 
 /**

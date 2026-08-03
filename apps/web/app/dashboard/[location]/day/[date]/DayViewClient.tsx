@@ -10,9 +10,10 @@ type GrowthReport = {
   daysRow: { current: number; priorMonth: number; lastYear: number };
   comparisonLabels: { priorMonth: string; lastYear: string };
   missing: { current: string[] };
+  noData: { priorMonth: boolean; lastYear: boolean };
 };
 type HourlyBucket = { hour: number; amountCents: number };
-type DrilldownTx = { date: string; amountCents: number; source: "gotab" | "courtreserve"; transactionType?: string | null; paymentType?: string | null };
+type DrilldownTx = { date: string | null; amountCents: number; source: "gotab" | "courtreserve"; transactionType?: string | null; paymentType?: string | null };
 type DrilldownItem = { item: string; amountCents: number; transactions: DrilldownTx[] };
 type DrilldownGroup = { group: string; amountCents: number; items: DrilldownItem[] };
 type BySource = { gotabGrossCents: number | null; courtreserveGrossCents: number | null };
@@ -150,15 +151,23 @@ export default function DayViewClient({ location, date }: { location: string; da
                   <td style={{ textAlign: "right", padding: "8px" }}>{fmtUsd(row.current)}</td>
                   <td style={{ textAlign: "right", padding: "8px" }}>
                     {fmtUsd(row.priorMonth)}{" "}
-                    <span style={{ fontSize: 12, color: row.vsPriorMonthPct == null ? theme.textSecondary : trafficDirection(row.vsPriorMonthPct, THRESHOLDS) === "up" ? theme.up : trafficDirection(row.vsPriorMonthPct, THRESHOLDS) === "down" ? theme.down : theme.flat }}>
-                      <TrafficDot pct={row.vsPriorMonthPct} />{fmtPct(row.vsPriorMonthPct)}
-                    </span>
+                    {report.noData.priorMonth ? (
+                      <span style={{ fontSize: 12, color: theme.textSecondary }}>no data</span>
+                    ) : (
+                      <span style={{ fontSize: 12, color: row.vsPriorMonthPct == null ? theme.textSecondary : trafficDirection(row.vsPriorMonthPct, THRESHOLDS) === "up" ? theme.up : trafficDirection(row.vsPriorMonthPct, THRESHOLDS) === "down" ? theme.down : theme.flat }}>
+                        <TrafficDot pct={row.vsPriorMonthPct} />{fmtPct(row.vsPriorMonthPct)}
+                      </span>
+                    )}
                   </td>
                   <td style={{ textAlign: "right", padding: "8px" }}>
                     {fmtUsd(row.lastYear)}{" "}
-                    <span style={{ fontSize: 12, color: row.vsLastYearPct == null ? theme.textSecondary : trafficDirection(row.vsLastYearPct, THRESHOLDS) === "up" ? theme.up : trafficDirection(row.vsLastYearPct, THRESHOLDS) === "down" ? theme.down : theme.flat }}>
-                      <TrafficDot pct={row.vsLastYearPct} />{fmtPct(row.vsLastYearPct)}
-                    </span>
+                    {report.noData.lastYear ? (
+                      <span style={{ fontSize: 12, color: theme.textSecondary }}>no data</span>
+                    ) : (
+                      <span style={{ fontSize: 12, color: row.vsLastYearPct == null ? theme.textSecondary : trafficDirection(row.vsLastYearPct, THRESHOLDS) === "up" ? theme.up : trafficDirection(row.vsLastYearPct, THRESHOLDS) === "down" ? theme.down : theme.flat }}>
+                        <TrafficDot pct={row.vsLastYearPct} />{fmtPct(row.vsLastYearPct)}
+                      </span>
+                    )}
                   </td>
                 </tr>
                 {openLine === row.businessLine && <DrilldownRows groups={drilldown[row.businessLine] ?? []} />}

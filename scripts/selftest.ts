@@ -437,6 +437,77 @@ async function main() {
     assert(total === 28_602_162, `total: expected 28602162 ($286,021.62), got ${total}`);
   });
 
+  const recRowMonthly = (source: "courtreserve" | "gotab", month: string, groupName: string, itemName: string, amountCents: number) => ({
+    locationSlug: "orlando", source, externalId: `${source}-${month}-${groupName}-${itemName}-${amountCents}`,
+    businessDate: null, periodMonth: month, groupName, itemName,
+    amountCents, taxCents: 0, netCents: amountCents, transactionType: null, paymentType: null,
+    feeId: null, paymentId: null, relationId: null, recognizedOn: null, raw: {},
+  });
+  await t("growth-report: MONTH-level double-count guard — a GoTab monthly aggregate (no business_date) still suppresses daily_sales for every OTHER date in the month, not just a matching one", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 31, currentPhase: "complete",
+      current: {
+        label: "2025-07",
+        courtRows: [recRowMonthly("gotab", "2025-07", "Business Lines", "food_beverage", 100_000)],
+        // A completely different date than anything in courtRows — the OLD per-date guard
+        // (gotabRecognizedDates.has(day.date)) would have let this double-count on top of the
+        // recognized row above; the month-level guard must suppress it regardless.
+        gotabDays: [{ date: "2025-07-20", status: "complete", breakdown: { uncategorized: 999_999 } }],
+        courtreserveOk: true,
+      },
+      priorMonth: { label: "2025-06", courtRows: [], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2024-07", courtRows: [], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2025-07-31",
+    });
+    const fb = report.rows.find(r => r.businessLine === "food_beverage")!;
+    assert(fb.current === 100_000, `expected only the recognized monthly aggregate (100000) — daily_sales for a different date must still be suppressed month-wide, got ${fb.current}`);
+  });
+  await t("growth-report: verified 2025-07 Orlando totals resolve exactly — GoTab 'Business Lines' grain (monthly aggregate, business_date NULL) + CourtReserve, unmapped surfaced, daily_sales gotab fully suppressed", () => {
+    const courtRows = [
+      recRowMonthly("gotab", "2025-07", "Business Lines", "food_beverage", 7_674_500),
+      recRowMonthly("gotab", "2025-07", "Business Lines", "events", 19_848_467),
+      recRowMonthly("gotab", "2025-07", "Business Lines", "pickleball", 5_268_436),
+      recRowMonthly("gotab", "2025-07", "Business Lines", "memberships", 827_399),
+      recRowMonthly("gotab", "2025-07", "Business Lines", "lessons", 1_223_800),
+      recRowMonthly("gotab", "2025-07", "Business Lines", "swag", 1_010_143),
+      recRow("courtreserve", "2025-07-10", "Pro Shop Rental", "Racquet Rental", 72_040), // no rule matches -> unmapped
+    ];
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 31, currentPhase: "complete",
+      current: {
+        label: "2025-07", courtRows,
+        // A legacy daily_sales GoTab day for the same month — must be fully suppressed since
+        // revenue_recognized already carries this month's GoTab total (the "Business Lines" grain).
+        gotabDays: [{ date: "2025-07-15", status: "complete", breakdown: { uncategorized: 99_999_999 } }],
+        courtreserveOk: true,
+      },
+      priorMonth: { label: "2025-06", courtRows: [], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2024-07", courtRows: [], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2025-07-31",
+    });
+    const line = (bl: string) => report.rows.find(r => r.businessLine === bl)!.current;
+    assert(line("food_beverage") === 7_674_500, `food_beverage: expected 7674500 ($76,745.00), got ${line("food_beverage")}`);
+    assert(line("events") === 19_848_467, `events: expected 19848467 ($198,484.67), got ${line("events")}`);
+    assert(line("pickleball") === 5_268_436, `pickleball: expected 5268436 ($52,684.36), got ${line("pickleball")}`);
+    assert(line("memberships") === 827_399, `memberships: expected 827399 ($8,273.99), got ${line("memberships")}`);
+    assert(line("lessons") === 1_223_800, `lessons: expected 1223800 ($12,238.00), got ${line("lessons")}`);
+    assert(line("swag") === 1_010_143, `swag: expected 1010143 ($10,101.43), got ${line("swag")}`);
+    assert(line("unmapped") === 72_040, `unmapped: expected 72040 ($720.40), got ${line("unmapped")}`);
+    const total = report.rows.find(r => r.businessLine === "total")!.current;
+    assert(total === 35_924_785, `total: expected 35924785 ($359,247.85), got ${total}`);
+  });
+  await t("growth-report: a comparison period with nothing booked at all is flagged noData — 'no data', never an em-dash-next-to-a-percentage that reads as a real 0% change", () => {
+    const report = computeGrowthReport({
+      locationSlug: "orlando", elapsedDays: 31, currentPhase: "complete",
+      current: { label: "2026-07", courtRows: [recRow("courtreserve", "2026-07-01", "Reservation", "Court Booking", 10_000)], gotabDays: [], courtreserveOk: true },
+      priorMonth: { label: "2026-06", courtRows: [], gotabDays: [], courtreserveOk: true },
+      lastYear: { label: "2025-07", courtRows: [recRow("courtreserve", "2025-07-01", "Reservation", "Court Booking", 5_000)], gotabDays: [], courtreserveOk: true },
+      rules: growthRules, thresholds: { green_pct: 5, red_pct: -5 }, recognitionThroughDate: "2026-07-31",
+    });
+    assert(report.noData.priorMonth === true, "prior month summed to zero across every line — expected noData.priorMonth true");
+    assert(report.noData.lastYear === false, "last year has real recognized revenue — expected noData.lastYear false");
+  });
+
   // 9 · reconciliation: recognized vs payment-basis per FeeCategory/TransactionType, with delta (spec section 4)
   const { computeReconciliation, groupByFeeCategory, computeDrivers } = await import("../packages/skills/reconciliation/index");
   await t("reconciliation: groups by FeeCategory + TransactionType and computes the delta without picking a winner", () => {
@@ -484,6 +555,21 @@ async function main() {
     await replaceRecognizedRevenue(testLocation, "2026-08-01", "2026-08-01", [rowsFor("2026-08-01", "Reservation", 22000)]);
     rows = await readRecognizedRevenue(testLocation, "2026-08-01", "2026-08-01");
     assert(rows.length === 1 && rows[0].amountCents === 22000, `expected the replace to win, got ${JSON.stringify(rows)}`);
+  });
+  await t("knowledge/revenue: readRecognizedRevenue also returns a GoTab monthly aggregate (business_date NULL) for the queried month — the exact row shape that used to vanish from the report", async () => {
+    const monthRow = {
+      locationSlug: testLocation, source: "gotab" as const, externalId: "",
+      businessDate: null, periodMonth: "2026-09", groupName: "Business Lines", itemName: "food_beverage",
+      amountCents: 500000, taxCents: 0, netCents: 500000, transactionType: null, paymentType: null,
+      feeId: null, paymentId: null, relationId: null, recognizedOn: null, raw: {},
+    };
+    await replaceRecognizedRevenue(testLocation, "2026-09-01", "2026-09-30", [monthRow]);
+    const rows = await readRecognizedRevenue(testLocation, "2026-09-01", "2026-09-30");
+    assert(rows.length === 1 && rows[0].businessDate === null && rows[0].amountCents === 500000, `expected the null-business_date monthly aggregate to round-trip, got ${JSON.stringify(rows)}`);
+    // A replace for the same month must delete the old aggregate too, not duplicate it.
+    await replaceRecognizedRevenue(testLocation, "2026-09-01", "2026-09-30", [{ ...monthRow, amountCents: 600000 }]);
+    const replaced = await readRecognizedRevenue(testLocation, "2026-09-01", "2026-09-30");
+    assert(replaced.length === 1 && replaced[0].amountCents === 600000, `expected the replace to win with no duplicate, got ${JSON.stringify(replaced)}`);
   });
   await t("knowledge/revenue: business_line_map seeds itself from the default rules", async () => {
     const rules = await listBusinessLineRules();
