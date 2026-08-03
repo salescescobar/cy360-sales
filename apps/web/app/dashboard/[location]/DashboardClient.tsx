@@ -131,7 +131,7 @@ export default function DashboardClient({ location }: { location: string }) {
               <p>{monthly.completeDays} complete day(s), {monthly.incompleteDays} incomplete (excluded)</p>
               {monthly.priorPeriod && (
                 <p>
-                  Prior month: {fmtUsd(monthly.priorPeriod.totalGrossCents)}
+                  {monthly.priorPeriod.label}: {fmtUsd(monthly.priorPeriod.totalGrossCents)}
                   {monthly.priorPeriod.pctChange != null ? ` (${monthly.priorPeriod.pctChange > 0 ? "+" : ""}${monthly.priorPeriod.pctChange}%)` : ""}
                 </p>
               )}

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { writeDay } from "../../packages/knowledge/index";
+import { writeDay, readDay } from "../../packages/knowledge/index";
 import { ensureAdmin } from "../../packages/knowledge/admins";
 
 /** Acceptance test (spec #1 v2, section 4 & 6): manager accounts are admin-provisioned,
@@ -14,8 +14,8 @@ const ORLANDO = "orlando";
  *  with whatever a previous run already wrote there and break the exact day-count assertion. */
 function uniqueTestMonth(): string {
   const seed = Date.now() + Math.floor(Math.random() * 1e6);
-  const year = 2000 + (seed % 25); // 2000-2024 — decades before any real data
-  const month = 1 + (Math.floor(seed / 25) % 12);
+  const year = 1800 + (seed % 200); // wide historical range — decades before any real data
+  const month = 1 + (Math.floor(seed / 200) % 12);
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
@@ -41,6 +41,16 @@ test.beforeAll(async () => {
   await writeDay(ORLANDO, `${SEED_MONTH}-06`, [
     { locationSlug: ORLANDO, date: `${SEED_MONTH}-06`, source: "gotab", grossAmountCents: 999999, breakdown: {} }, // courtreserve missing -> incomplete
   ]);
+
+  // The live warehouse write can lag briefly behind a read (network/replication), and the
+  // dashboard only fetches once on mount — poll until the seed is actually readable back,
+  // rather than let the UI race a write that hasn't settled yet.
+  for (let i = 0; i < 20; i++) {
+    const rows = await readDay(ORLANDO, SEED_DATE);
+    if (rows.find(r => r.source === "gotab")?.grossAmountCents === 186775 && rows.find(r => r.source === "courtreserve")?.grossAmountCents === 155000) break;
+    if (i === 19) throw new Error(`seed data for ${SEED_DATE} never became readable`);
+    await new Promise(r => setTimeout(r, 250));
+  }
 });
 
 function uniqueEmail(tag: string): string {

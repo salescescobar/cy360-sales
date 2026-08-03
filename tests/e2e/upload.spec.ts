@@ -11,12 +11,13 @@ const ADMIN_PASSWORD = "correct horse battery staple admin";
 /** The live warehouse is a real, persistent, shared database (not reset between runs) — a
  *  fixed date would collide with whatever a previous run already wrote there, and the
  *  "nothing to replace yet" assertion below depends on this date being untouched. Randomized
- *  like uniqueEmail() below, decades before any real data. */
+ *  like uniqueEmail() below, over a wide historical range (~70k possible dates) to keep
+ *  repeated local/CI runs from colliding with each other. */
 function uniqueTestDate(): string {
   const seed = Date.now() + Math.floor(Math.random() * 1e6);
-  const year = 2000 + (seed % 25);
-  const month = 1 + (Math.floor(seed / 25) % 12);
-  const day = 1 + (Math.floor(seed / 300) % 28);
+  const year = 1800 + (seed % 200);
+  const month = 1 + (Math.floor(seed / 200) % 12);
+  const day = 1 + (Math.floor(seed / 2400) % 28);
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
@@ -92,9 +93,11 @@ test("upload -> preview -> confirm -> value appears on the dashboard; malformed 
   await page.getByRole("button", { name: /sign in/i }).click();
   await page.getByRole("tab", { name: "Day" }).click();
   await page.locator('input[type="date"]').fill(UPLOAD_DATE);
-  // "Total: $100.00" is unique — a GoTab-only day also shows "GoTab (F&B): $100.00" and
-  // "food: $100.00" for the same figure, so the "Total:" prefix disambiguates.
-  await expect(page.getByText("Total: $100.00")).toBeVisible();
+  // Assert on the GoTab-specific line, not Total — Total also includes CourtReserve, and
+  // this randomized date has no guarantee of being the very first row ever written for
+  // Orlando (a concurrent run could have already loaded CourtReserve data here), so Total
+  // isn't deterministic the way the GoTab figure this upload just wrote is.
+  await expect(page.getByText("GoTab (F&B): $100.00")).toBeVisible();
   // GoTab only — CourtReserve hasn't been uploaded for this date — criterion #3: incomplete.
   await expect(page.getByText("Incomplete", { exact: false })).toBeVisible();
 
@@ -113,6 +116,6 @@ test("upload -> preview -> confirm -> value appears on the dashboard; malformed 
   await expect(page.getByText(new RegExp(`Replaced existing data for: ${UPLOAD_DATE}`))).toBeVisible();
 
   await page.goto(`/dashboard/orlando?period=day&date=${UPLOAD_DATE}`);
-  await expect(page.getByText("Total: $250.00")).toBeVisible();
-  await expect(page.getByText("Total: $100.00")).toHaveCount(0); // replaced, not summed alongside the old value
+  await expect(page.getByText("GoTab (F&B): $250.00")).toBeVisible();
+  await expect(page.getByText("GoTab (F&B): $100.00")).toHaveCount(0); // replaced, not summed alongside the old value
 });
